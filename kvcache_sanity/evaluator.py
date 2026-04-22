@@ -3,6 +3,35 @@ import uuid
 from openai import OpenAI
 from kvcache_sanity.models import EvaluationResult, EvaluationTrace
 
+def _extract_json(raw: str) -> str:
+    """Best-effort extraction of a JSON object from a free-form model response.
+
+    Handles three common cases:
+    - Bare JSON (ideal)
+    - JSON wrapped in ```...``` or ```json...``` code fences
+    - JSON embedded in prose (find first { … last })
+    """
+    # 1. Bare JSON — try it directly first (fast path)
+    stripped = raw.strip()
+    if stripped.startswith("{"):
+        return stripped
+
+    # 2. Markdown code fence
+    if "```" in raw:
+        for part in raw.split("```"):
+            candidate = part.lstrip("json").strip()
+            if candidate.startswith("{"):
+                return candidate
+
+    # 3. JSON embedded in prose — extract from first { to last }
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start != -1 and end > start:
+        return raw[start:end + 1]
+
+    return raw  # give up; caller will get a parse error with the full text
+
+
 _JUDGE_PROMPT = """\
 You are evaluating whether two answers to the same question are consistent and correct.
 
@@ -74,23 +103,14 @@ def evaluate_answers(
     response = eval_client.chat.completions.create(
         model=model,
         messages=messages,
-        max_tokens=256,
+        max_tokens=512,
         temperature=0.0,
     )
 
     raw = (response.choices[0].message.content or "").strip()
 
-    # Strip markdown code fences if the model wraps its JSON
-    if "```" in raw:
-        parts = raw.split("```")
-        for part in parts:
-            candidate = part.lstrip("json").strip()
-            if candidate.startswith("{"):
-                raw = candidate
-                break
-
     try:
-        data = json.loads(raw)
+        data = json.loads(_extract_json(raw))
         score_01 = float(data["score"]) / 10.0
         passed = score_01 >= threshold
         result = EvaluationResult(
