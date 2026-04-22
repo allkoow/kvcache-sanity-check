@@ -24,7 +24,8 @@ def build_messages(
     """
     system_content = (
         "You are a helpful assistant. "
-        "I will provide several documents for you to read, then ask a question about them."
+        "I will provide several documents for you to read, then ask a question about them. "
+        "Each document is enclosed in <document>...</document> tags."
     )
     if unique_prefix:
         system_content = f"[{unique_prefix}] " + system_content
@@ -35,7 +36,7 @@ def build_messages(
         doc = documents[doc_id]
         messages.append({
             "role": "user",
-            "content": f"Document {i} — {doc.title}:\n\n{doc.content}",
+            "content": f"Document {i} — {doc.title}:\n<document>\n{doc.content}\n</document>",
         })
         messages.append({"role": "assistant", "content": _ACK})
 
@@ -105,7 +106,11 @@ def build_pairs_messages(
     Earlier assistant turns use a short hardcoded ACK so the conversation
     structure is identical between target and reference runs.
     """
-    system_content = "You are a helpful assistant."
+    system_content = (
+        "You are a helpful assistant. "
+        "The user will paste text enclosed in <document>...</document> tags followed by a question. "
+        "Answer only about the document in that specific message."
+    )
     if unique_prefix:
         system_content = f"[{unique_prefix}] " + system_content
 
@@ -115,7 +120,7 @@ def build_pairs_messages(
         doc = documents[pair.doc_id]
         messages.append({
             "role": "user",
-            "content": f"{doc.content}\n\n{pair.question}",
+            "content": f"<document>\n{doc.content}\n</document>\n\n{pair.question}",
         })
         if i < up_to_index:
             messages.append({"role": "assistant", "content": _PAIRS_ACK})
