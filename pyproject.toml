@@ -13,10 +13,12 @@ dependencies = [
     "pyyaml>=6.0",
     "pydantic>=2.0",
     "rich>=13.0",
+    "textual>=0.55",
 ]
 
 [project.scripts]
 kvcache-check = "kvcache_sanity.main:cli"
+kvcache-logs = "kvcache_sanity.tui:tui"
 
 [tool.hatch.build.targets.wheel]
 packages = ["kvcache_sanity"]

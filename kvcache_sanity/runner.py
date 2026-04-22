@@ -1,6 +1,6 @@
 import uuid
 from openai import OpenAI
-from kvcache_sanity.models import Scenario, Document
+from kvcache_sanity.models import Scenario, Document, RunResult
 
 # Short hardcoded acknowledgment so conversation structure is identical
 # between target and reference runs. This ensures the only variable is
@@ -50,7 +50,7 @@ def run_scenario(
     model: str,
     unique_prefix: str | None = None,
     max_tokens: int = 512,
-) -> str:
+) -> RunResult:
     messages = build_messages(scenario, documents, unique_prefix)
     response = client.chat.completions.create(
         model=model,
@@ -58,7 +58,11 @@ def run_scenario(
         max_tokens=max_tokens,
         temperature=0.1,
     )
-    return response.choices[0].message.content or ""
+    return RunResult(
+        answer=response.choices[0].message.content or "",
+        messages=messages,
+        unique_prefix=unique_prefix,
+    )
 
 
 def get_reference_answer(
@@ -67,7 +71,7 @@ def get_reference_answer(
     client: OpenAI,
     model: str,
     max_tokens: int = 512,
-) -> str:
+) -> RunResult:
     """Run the scenario with a unique prefix to force a full KV cache miss.
 
     The UUID prefix is placed at the start of the system message. Because KV

@@ -1,3 +1,4 @@
+from dataclasses import dataclass, field
 from pydantic import BaseModel
 from typing import Optional
 
@@ -31,5 +32,53 @@ class TestResult(BaseModel):
     question: str
     target_answer: str
     reference_answer: str
+    evaluation: EvaluationResult
+    error: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Runner return type — carries messages alongside the answer so the caller
+# can build a RunLog without a second round-trip.
+# ---------------------------------------------------------------------------
+
+@dataclass
+class RunResult:
+    answer: str
+    messages: list[dict] = field(default_factory=list)
+    unique_prefix: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Evaluator return type — wraps EvaluationResult with the judge trace.
+# ---------------------------------------------------------------------------
+
+@dataclass
+class EvaluationTrace:
+    result: EvaluationResult
+    judge_messages: list[dict] = field(default_factory=list)
+    judge_raw_response: str = ""
+    eval_prefix: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Log record — one JSON line per run in the .jsonl log file.
+# ---------------------------------------------------------------------------
+
+class MessageLog(BaseModel):
+    role: str
+    content: str  # document content is truncated at log-write time
+
+
+class RunLog(BaseModel):
+    timestamp: str
+    scenario_id: str
+    iteration: int
+    question: str
+    target_messages: list[MessageLog]
+    reference_prefix: str
+    target_answer: str
+    reference_answer: str
+    judge_messages: list[MessageLog]
+    judge_raw_response: str
     evaluation: EvaluationResult
     error: Optional[str] = None

@@ -8,13 +8,60 @@ from rich.console import Console
 
 from kvcache_sanity.corpus import load_documents
 from kvcache_sanity.evaluator import evaluate_answers
-from kvcache_sanity.models import EvaluationResult, Scenario, TestResult
+from kvcache_sanity.logger import RunLogger
+from kvcache_sanity.models import EvaluationResult, EvaluationTrace, RunResult, Scenario, TestResult
 from kvcache_sanity.runner import get_reference_answer, run_scenario
 from kvcache_sanity import report
 
 console = Console()
 
 DEFAULT_SCENARIOS_FILE = Path(__file__).parent.parent / "scenarios" / "default.yaml"
+
+_CONFIG_SEARCH_PATHS = [
+    Path("kvcache-check.yaml"),
+    Path.home() / ".config" / "kvcache-check" / "config.yaml",
+]
+
+
+def _load_config(path: Path) -> dict:
+    with open(path) as f:
+        data = yaml.safe_load(f) or {}
+    # Normalise keys: YAML may use dashes or underscores; Click wants underscores.
+    return {k.replace("-", "_"): v for k, v in data.items()}
+
+
+def _find_config(explicit: str | None) -> dict:
+    if explicit:
+        p = Path(explicit)
+        if p.exists():
+            return _load_config(p)
+        raise click.BadParameter(f"Config file not found: {explicit}", param_hint="--config")
+    for p in _CONFIG_SEARCH_PATHS:
+        if p.exists():
+            return _load_config(p)
+    return {}
+
+
+class _ConfigFileCommand(click.Command):
+    """Command subclass that injects a YAML config file as Click's default_map."""
+
+    def make_context(self, info_name, args, **kwargs):
+        # Peek at args to find --config value before Click processes anything.
+        config_path: str | None = None
+        for i, arg in enumerate(args):
+            if arg in ("--config", "-c") and i + 1 < len(args):
+                config_path = args[i + 1]
+                break
+            if arg.startswith("--config="):
+                config_path = arg.split("=", 1)[1]
+                break
+        try:
+            config = _find_config(config_path)
+        except click.BadParameter as exc:
+            raise exc
+        if config:
+            kwargs.setdefault("default_map", {}).update(config)
+        return super().make_context(info_name, args, **kwargs)
 
 
 def _load_scenarios(path: Path) -> list[Scenario]:
@@ -23,7 +70,11 @@ def _load_scenarios(path: Path) -> list[Scenario]:
     return [Scenario(**s) for s in data["scenarios"]]
 
 
-@click.command()
+@click.command(cls=_ConfigFileCommand)
+@click.option("--config", "-c", default=None, is_eager=True, expose_value=False,
+              type=click.Path(), metavar="PATH",
+              help="YAML config file. Defaults: ./kvcache-check.yaml, "
+                   "~/.config/kvcache-check/config.yaml.")
 @click.option("--target-url", required=True,
               help="Base URL of the target inference server (OpenAI-compatible, e.g. http://localhost:8000).")
 @click.option("--model", required=True,
@@ -48,13 +99,15 @@ def _load_scenarios(path: Path) -> list[Scenario]:
               help="Directory of .txt document files. Defaults to the bundled corpus/.")
 @click.option("--max-tokens", default=512, show_default=True, type=int,
               help="Max tokens for model answer responses.")
+@click.option("--log-file", default=None, type=click.Path(), metavar="PATH",
+              help="Append full run traces (JSON Lines) to this file for later review with kvcache-logs.")
 @click.option("--verbose", "-v", is_flag=True,
               help="Print target and reference answers for every test, not just failures.")
 def cli(
     target_url, model, api_key,
     judge_url, judge_model, judge_api_key,
     iterations, threshold, scenarios_file, corpus_dir,
-    max_tokens, verbose,
+    max_tokens, log_file, verbose,
 ):
     """Sanity-check LLM output correctness when using offloaded KV cache.
 
@@ -79,9 +132,13 @@ def cli(
         judge_client = OpenAI(base_url=f"{judge_url.rstrip('/')}/v1", api_key=judge_api_key)
     judge_model_name = judge_model or model
 
+    run_logger = RunLogger(Path(log_file)) if log_file else None
+
     console.print("[bold]KV Cache Sanity Check[/]")
     console.print(f"Target : {target_base}  model={model}")
     console.print(f"Scenarios: {len(scenarios)}  iterations: {iterations}  threshold: {threshold}")
+    if run_logger:
+        console.print(f"Logging to: {log_file}")
     console.print()
 
     all_results: list[TestResult] = []
@@ -90,17 +147,24 @@ def cli(
         console.print(f"[bold cyan]{scenario.id}[/] — {scenario.description}")
 
         for i in range(1, iterations + 1):
+            error: str | None = None
+            target_run = RunResult(answer="")
+            reference_run = RunResult(answer="")
+            trace = EvaluationTrace(
+                result=EvaluationResult(score=0.0, reasoning="", passed=False)
+            )
+
             try:
-                target_answer = run_scenario(
+                target_run = run_scenario(
                     scenario, documents, target_client, model, max_tokens=max_tokens
                 )
-                reference_answer = get_reference_answer(
+                reference_run = get_reference_answer(
                     scenario, documents, target_client, model, max_tokens=max_tokens
                 )
-                evaluation = evaluate_answers(
+                trace = evaluate_answers(
                     question=scenario.question,
-                    target_answer=target_answer,
-                    reference_answer=reference_answer,
+                    target_answer=target_run.answer,
+                    reference_answer=reference_run.answer,
                     client=target_client,
                     model=judge_model_name,
                     threshold=threshold,
@@ -110,23 +174,34 @@ def cli(
                     scenario_id=scenario.id,
                     iteration=i,
                     question=scenario.question,
-                    target_answer=target_answer,
-                    reference_answer=reference_answer,
-                    evaluation=evaluation,
+                    target_answer=target_run.answer,
+                    reference_answer=reference_run.answer,
+                    evaluation=trace.result,
                 )
             except Exception as exc:
+                error = str(exc)
                 result = TestResult(
                     scenario_id=scenario.id,
                     iteration=i,
                     question=scenario.question,
-                    target_answer="",
-                    reference_answer="",
+                    target_answer=target_run.answer,
+                    reference_answer=reference_run.answer,
                     evaluation=EvaluationResult(score=0.0, reasoning=str(exc), passed=False),
-                    error=str(exc),
+                    error=error,
                 )
 
             all_results.append(result)
             report.print_result(result, verbose=verbose)
+
+            if run_logger:
+                run_logger.log(
+                    scenario=scenario,
+                    iteration=i,
+                    target=target_run,
+                    reference=reference_run,
+                    trace=trace,
+                    error=error,
+                )
 
         console.print()
 

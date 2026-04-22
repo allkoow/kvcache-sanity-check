@@ -1,7 +1,7 @@
 import json
 import uuid
 from openai import OpenAI
-from kvcache_sanity.models import EvaluationResult
+from kvcache_sanity.models import EvaluationResult, EvaluationTrace
 
 _JUDGE_PROMPT = """\
 You are evaluating whether two answers to the same question are consistent and correct.
@@ -38,7 +38,7 @@ def evaluate_answers(
     model: str,
     threshold: float = 0.7,
     judge_client: OpenAI | None = None,
-) -> EvaluationResult:
+) -> EvaluationTrace:
     """Compare target_answer to reference_answer using LLM-as-judge.
 
     The evaluation call itself uses a unique prefix to prevent cache hits,
@@ -46,6 +46,9 @@ def evaluate_answers(
 
     If judge_client is provided it is used instead of client for the evaluation
     call (useful when a more capable external model is available for judging).
+
+    Returns an EvaluationTrace that bundles the EvaluationResult with the full
+    judge message exchange and raw response for logging.
     """
     eval_client = judge_client or client
     eval_prefix = str(uuid.uuid4())
@@ -90,16 +93,22 @@ def evaluate_answers(
         data = json.loads(raw)
         score_01 = float(data["score"]) / 10.0
         passed = score_01 >= threshold
-        return EvaluationResult(
+        result = EvaluationResult(
             score=round(score_01, 3),
             reasoning=str(data.get("reasoning", "")),
             passed=passed,
         )
     except (json.JSONDecodeError, KeyError, ValueError):
-        # Fallback: surface the raw response for debugging
         passed = "pass" in raw.lower() and "fail" not in raw.lower()
-        return EvaluationResult(
+        result = EvaluationResult(
             score=1.0 if passed else 0.0,
             reasoning=f"[JSON parse failed] raw response: {raw[:300]}",
             passed=passed,
         )
+
+    return EvaluationTrace(
+        result=result,
+        judge_messages=messages,
+        judge_raw_response=raw,
+        eval_prefix=eval_prefix,
+    )
