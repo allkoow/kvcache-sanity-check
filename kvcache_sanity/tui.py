@@ -72,7 +72,6 @@ class DetailPane(VerticalScroll):
             Static(
                 f"[bold]{log.scenario_id}[/bold]  iter {log.iteration}  "
                 f"[{style}]{verdict}[/]  score={score_pct}",
-                id="detail-header",
             )
         )
         self.mount(Static(f"[dim]{log.timestamp}[/dim]"))
