@@ -1,0 +1,15 @@
+# Python: A Brief History of the Programming Language
+
+Python is a high-level, general-purpose programming language first conceived by Guido van Rossum in the late 1980s while he worked at Centrum Wiskunde & Informatica (CWI) in the Netherlands. Van Rossum wanted to create a successor to the ABC language that addressed some of its limitations while preserving its emphasis on readability. He began writing the first interpreter in December 1989, reportedly using his Christmas vacation to work on it.
+
+The name "Python" was not chosen for the reptile but for Monty Python's Flying Circus, the British comedy series Van Rossum was watching during development. This whimsical origin has shaped Python culture ever since, with official documentation routinely featuring spam, eggs, and parrots.
+
+Python 0.9.0 was released in February 1991, already supporting classes with inheritance, exception handling, and first-class functions. Python 1.0 arrived in January 1994 and introduced functional tools such as lambda, map, filter, and reduce. Python 2.0 followed in 2000, adding list comprehensions and a garbage collector.
+
+The transition from Python 2 to Python 3 (released in December 2008) was deliberately incompatible — Van Rossum chose to fix long-standing design flaws, including making Unicode strings the default, at the cost of breaking backward compatibility. This caused a prolonged migration that lasted over a decade. Python 2 officially reached end-of-life on January 1, 2020.
+
+Python's design philosophy is captured in PEP 20, "The Zen of Python," a collection of aphorisms including "Beautiful is better than ugly," "Simple is better than complex," and "Readability counts." The language uses significant indentation rather than curly braces to delimit code blocks, making whitespace part of the syntax.
+
+Today Python consistently ranks as one of the world's two most popular programming languages in indices such as TIOBE and the Stack Overflow Developer Survey. It is the dominant language for data science (NumPy, Pandas, scikit-learn), machine learning (TensorFlow, PyTorch), web development (Django, Flask), automation, and scientific computing. Google, Instagram, Dropbox, and Netflix all rely heavily on Python in their infrastructure.
+
+The Python Software Foundation governs the language and manages the PEP process — the formal mechanism through which major changes are proposed, discussed, and accepted or rejected by the community.

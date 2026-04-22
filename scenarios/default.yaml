@@ -1,0 +1,49 @@
+scenarios:
+  # Documents are loaded in order. The question targets the FIRST document —
+  # the one whose KV blocks were computed earliest and are most likely evicted.
+  - id: early_doc_recall
+    description: "Recall content from the first document loaded (earliest KV blocks, highest eviction risk)"
+    document_ids:
+      - doc_s1_python
+      - doc_m1_apollo
+      - doc_m2_dna
+      - doc_l1_french_revolution
+      - doc_s2_coffee
+    question: "Please summarize the first document I gave you. What is it about and what are two or three key facts from it?"
+    target_doc_id: doc_s1_python
+    key_facts:
+      - Python
+      - programming language
+      - Guido van Rossum
+
+  # Question targets a document from the middle of the context window.
+  - id: middle_doc_recall
+    description: "Recall content from a middle document (moderate eviction risk)"
+    document_ids:
+      - doc_s2_coffee
+      - doc_s1_python
+      - doc_m1_apollo
+      - doc_m2_dna
+      - doc_l1_french_revolution
+    question: "What was the third document I provided about? Give me a brief summary including two specific facts."
+    target_doc_id: doc_m1_apollo
+    key_facts:
+      - Apollo
+      - Moon
+      - NASA
+
+  # Asks for a specific named fact, harder to guess without the right document.
+  - id: specific_fact_retrieval
+    description: "Retrieve a named specific fact from an early document"
+    document_ids:
+      - doc_s2_coffee
+      - doc_m2_dna
+      - doc_l1_french_revolution
+      - doc_m1_apollo
+      - doc_s1_python
+    question: "Based only on the documents I provided, what country is cited as the origin of coffee cultivation, and what century did cultivation spread to the Arabian Peninsula?"
+    target_doc_id: doc_s2_coffee
+    key_facts:
+      - Ethiopia
+      - fifteenth century
+      - Yemen

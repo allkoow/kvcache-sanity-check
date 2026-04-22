@@ -1,0 +1,39 @@
+# The Apollo Program: America's Lunar Missions
+
+The Apollo program was the United States human spaceflight effort that achieved the first crewed landings on the Moon between 1969 and 1972. Driven by Cold War competition with the Soviet Union and underwritten by an enormous national investment, Apollo placed twelve astronauts on the lunar surface and returned all of them safely to Earth, while demonstrating a level of engineering ambition that has not been matched since.
+
+## Origins and Kennedy's Commitment
+
+The program emerged directly from the shock of Soviet space achievements. Sputnik's 1957 launch revealed that the USSR could place objects in orbit; Yuri Gagarin's orbital flight in April 1961 confirmed that humans could survive in space. President John F. Kennedy responded on May 25, 1961 — barely three weeks after Alan Shepard's suborbital hop made him the first American in space — by committing the nation before Congress to "landing a man on the Moon and returning him safely to the Earth" before the end of the decade. At the time, the United States had accumulated a grand total of fifteen minutes of human spaceflight experience.
+
+## Mission Architecture and the Saturn V
+
+NASA's engineers chose Lunar Orbit Rendezvous (LOR) over alternatives that would have required a single enormous ship flying directly to the surface. Under LOR, a Command/Service Module carried the three-person crew to lunar orbit; a separate Lunar Module then detached, descended to the surface with two crew members, and returned to dock with the Command Module in orbit. The approach required mastering orbital rendezvous and docking — a then-untested technique — but allowed the vehicles to be far smaller and lighter than a direct-flight design.
+
+The Saturn V rocket that powered every lunar mission remains the most powerful operational rocket ever built. Standing 363 feet tall and weighing approximately 6.2 million pounds at launch, its first stage burned more than a ton of propellant every second. The five F-1 engines in that stage generated 7.6 million pounds of combined thrust. Wernher von Braun's team at Marshall Space Flight Center developed it across less than a decade.
+
+## Disaster and Recovery
+
+Before any Moon mission flew, Apollo suffered a catastrophic loss. On January 27, 1967, an electrical fire ignited in the pure-oxygen atmosphere of the Apollo 1 capsule during a launch rehearsal at Kennedy Space Center. Astronauts Gus Grissom, Ed White, and Roger Chaffee died within seconds. NASA suspended crewed flights for eighteen months, redesigning the capsule and overhauling its safety review processes. The accident ultimately improved the program's reliability, though at a terrible cost.
+
+Apollo 7 (October 1968) proved the Command Module in Earth orbit. Apollo 8 (December 1968) carried Frank Borman, James Lovell, and William Anders to lunar orbit and back — the first humans to leave Earth's gravitational influence — broadcasting a Christmas Eve television transmission from 240,000 miles away.
+
+## Apollo 11: The First Landing
+
+On July 16, 1969, Saturn V SA-506 lifted off from Kennedy Space Center carrying Neil Armstrong, Buzz Aldrin, and Michael Collins. Four days later, the Lunar Module Eagle separated from the Command Module Columbia and descended toward the Sea of Tranquility. Computer alarms during final approach — caused by an overloaded guidance computer — were recognized by flight controller Steve Bales as non-fatal; he called "Go" and Armstrong continued. Armstrong then manually flew past a boulder field and touched down with roughly twenty-five seconds of descent fuel remaining.
+
+On July 20, 1969, at 10:56 PM EDT, Armstrong stepped onto the surface: "That's one small step for [a] man, one giant leap for mankind." Aldrin joined him nineteen minutes later. In two and a half hours outside the spacecraft they planted the American flag, deployed instruments, collected 47.5 pounds of samples, and spoke briefly with President Nixon by radiotelephone.
+
+## Later Missions and the Near-Disaster of Apollo 13
+
+Five more landings followed. Apollo 12 (November 1969) achieved a precision landing near the Surveyor 3 probe. Apollo 14 (February 1971) took Alan Shepard — the first American in space, now also walking on the Moon — to the Fra Mauro highlands. Apollos 15, 16, and 17 carried Lunar Roving Vehicles, battery-powered cars that allowed astronauts to range several miles from their landers and dramatically increased scientific return.
+
+Apollo 13 (April 1970) became famous for its emergency. An oxygen tank in the Service Module exploded 200,000 miles from Earth, crippling the ship's power and oxygen supply. The crew — Jim Lovell, Jack Swigert, and Fred Haise — retreated to the Lunar Module and used it as a lifeboat for four days while flight controllers in Houston and the crew worked through improvised solutions to bring them home. No landing was possible, but all three returned safely on April 17.
+
+Apollo 17 (December 1972) was the final mission. Harrison Schmitt, a trained geologist and the only professional scientist to walk on the Moon, collected orange-tinted soil near a crater — later identified as volcanic glass beads approximately 3.5 billion years old, evidence of ancient pyroclastic eruptions. Schmitt and commander Gene Cernan were the last humans to stand on the Moon as of 2025.
+
+## Scientific and Cultural Legacy
+
+Apollo missions returned 842 pounds of lunar rock and soil, specimens that geologists continue to study. Analysis strongly supported the Giant Impact Hypothesis: the Moon formed from debris ejected when a Mars-sized body, now called Theia, struck the early Earth roughly 4.5 billion years ago.
+
+The program employed approximately 400,000 people at its peak and cost around $25 billion in 1970s dollars (roughly $150 billion in today's terms). Its technological spilloffs contributed to advances in integrated circuits, water purification, memory foam, and scratch-resistant lens coatings.

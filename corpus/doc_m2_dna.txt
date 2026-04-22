@@ -1,0 +1,43 @@
+# The Discovery of the DNA Double Helix
+
+The determination of DNA's double helix structure in 1953 transformed biology from a discipline that described life into one that could explain it at the molecular level. The story of how that structure was found involves two of the century's most gifted scientists, an extraordinary piece of experimental data, and a dispute over credit that has never been fully resolved.
+
+## The Race to Understand Heredity
+
+By the early 1950s most biochemists accepted that deoxyribonucleic acid (DNA) carried genetic information, though a significant minority still believed proteins were more plausible candidates. The pressing question was structural: what did DNA look like, and how could that shape explain heredity?
+
+Three groups were closing in. At the Cavendish Laboratory in Cambridge, James Watson — a young American biologist — and Francis Crick, a British physicist turned structural biologist, were building physical models guided by chemical constraints. At King's College London, Rosalind Franklin and her student Raymond Gosling were conducting meticulous X-ray crystallography experiments on carefully prepared DNA fibers. Maurice Wilkins, Franklin's nominal supervisor at King's College, was also doing X-ray diffraction work on DNA and would maintain his own independent line of inquiry.
+
+## Franklin's Experimental Work
+
+Franklin was a superb experimentalist. She recognized early that DNA existed in two distinct forms — the compact "A" form at low humidity and the elongated "B" form at higher humidity — and developed techniques to prepare samples of each with exceptional purity and to photograph their diffraction patterns with unusual clarity.
+
+In May 1952, Franklin and Gosling photographed the B form with a long exposure and produced what became known as Photo 51. The image showed a clear X-shaped pattern of reflections, a signature of a helical structure. Its proportions also revealed key parameters: the helix repeat distance, the spacing between base pairs, and the approximate diameter of the molecule.
+
+Franklin was characteristically cautious about interpreting the A form as helical and did not rush to publish a structural model. She was building toward a complete, experimentally grounded picture rather than reasoning from incomplete data to a proposed structure.
+
+## The Transfer of Data and Watson and Crick's Breakthrough
+
+In January 1953, Maurice Wilkins showed Watson Photo 51 during a visit to King's College. Watson later acknowledged that seeing the photograph allowed him to immediately infer that the B form was helical. Around the same time, Watson and Crick received, through an intermediary, access to an unpublished report Franklin had prepared for the Medical Research Council containing precise measurements of the DNA fiber dimensions and its water content.
+
+Franklin was unaware that her data and photograph were being shared with the Cambridge team. The ethical standing of that transfer remains contested among historians of science: some characterize it as a normal, if informal, sharing of information within the research community; others view it as a significant breach of scientific norms and credit.
+
+Armed with these measurements, Watson and Crick made rapid progress. They were also guided by Erwin Chargaff's earlier observation that in any DNA sample adenine and thymine always appeared in equal amounts, as did guanine and cytosine — a pattern that had seemed puzzling until it snapped into place as a rule about base pairing.
+
+On February 28, 1953, Watson and Crick announced to colleagues over lunch at the Eagle pub that they had found the secret of life. Their model placed the sugar-phosphate backbone on the outside of a right-handed helix and the paired bases — adenine with thymine, guanine with cytosine — on the inside, held together by hydrogen bonds.
+
+## Publication and Reception
+
+Watson and Crick's letter appeared in Nature on April 25, 1953, accompanied by companion papers from Wilkins and colleagues and from Franklin and Gosling. Their paper, barely nine hundred words long, closed with a remark of famous British restraint: "It has not escaped our notice that the specific pairing we have postulated immediately suggests a possible copying mechanism for the genetic material." If the strands separated, each could template the synthesis of a new complement — a molecular explanation of heredity that was both elegant and immediately testable.
+
+Franklin's paper in the same issue provided the X-ray evidence that confirmed the model. She had reached essentially similar conclusions about the B form from her own analysis; the model allowed her to understand the A form data she had been puzzling over.
+
+## Credit and the Nobel Prize
+
+Watson, Crick, and Wilkins shared the Nobel Prize in Physiology or Medicine in 1962. Rosalind Franklin had died of ovarian cancer in April 1958 at thirty-seven; the Nobel is not awarded posthumously, so the question of her inclusion was never faced directly. Watson's 1968 memoir The Double Helix depicted Franklin in terms that many scientists found unfair and demeaning, prompting a reassessment that has continued ever since.
+
+Contemporary historians of science generally regard Franklin's contribution as indispensable: Photo 51 and her precise fiber measurements provided the data that allowed Watson and Crick to build the correct model. Whether that constitutes a contribution equal to theirs, or how it should have been credited, remains a live discussion.
+
+## Impact
+
+The double helix unlocked molecular biology. Within a decade, the genetic code — the mapping from DNA triplets to amino acids — was solved. Recombinant DNA technology, polymerase chain reaction (PCR), DNA fingerprinting, gene therapy, and whole-genome sequencing all rest on knowing the structure. The double helix is arguably the most consequential structural determination in the history of science.

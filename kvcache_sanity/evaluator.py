@@ -1,0 +1,105 @@
+import json
+import uuid
+from openai import OpenAI
+from kvcache_sanity.models import EvaluationResult
+
+_JUDGE_PROMPT = """\
+You are evaluating whether two answers to the same question are consistent and correct.
+
+Question asked: {question}
+
+Answer A (reference — generated without any cache, treated as ground truth):
+{reference_answer}
+
+Answer B (under test — generated using potentially cached KV blocks):
+{target_answer}
+
+Evaluate whether Answer B is consistent with Answer A on:
+1. Topic/document addressed — does it talk about the same thing?
+2. Key facts and information — are the facts consistent?
+3. Overall accuracy — would a reader get the same understanding?
+
+Score 0–10:
+  10 = identical or essentially equivalent
+  7–9 = consistent, minor wording differences
+  4–6 = partially correct or missing key points
+  0–3 = wrong topic, major factual errors, or about a different document entirely
+
+Respond with valid JSON only — no markdown, no explanation outside the JSON:
+{{"score": <int 0-10>, "reasoning": "<one or two sentences>", "verdict": "<pass|fail>"}}\
+"""
+
+
+def evaluate_answers(
+    question: str,
+    target_answer: str,
+    reference_answer: str,
+    client: OpenAI,
+    model: str,
+    threshold: float = 0.7,
+    judge_client: OpenAI | None = None,
+) -> EvaluationResult:
+    """Compare target_answer to reference_answer using LLM-as-judge.
+
+    The evaluation call itself uses a unique prefix to prevent cache hits,
+    since the judge must not be influenced by prior cached state either.
+
+    If judge_client is provided it is used instead of client for the evaluation
+    call (useful when a more capable external model is available for judging).
+    """
+    eval_client = judge_client or client
+    eval_prefix = str(uuid.uuid4())
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                f"[eval-session:{eval_prefix}] "
+                "You are a precise answer evaluator. Respond only with valid JSON."
+            ),
+        },
+        {
+            "role": "user",
+            "content": _JUDGE_PROMPT.format(
+                question=question,
+                reference_answer=reference_answer,
+                target_answer=target_answer,
+            ),
+        },
+    ]
+
+    response = eval_client.chat.completions.create(
+        model=model,
+        messages=messages,
+        max_tokens=256,
+        temperature=0.0,
+    )
+
+    raw = (response.choices[0].message.content or "").strip()
+
+    # Strip markdown code fences if the model wraps its JSON
+    if "```" in raw:
+        parts = raw.split("```")
+        for part in parts:
+            candidate = part.lstrip("json").strip()
+            if candidate.startswith("{"):
+                raw = candidate
+                break
+
+    try:
+        data = json.loads(raw)
+        score_01 = float(data["score"]) / 10.0
+        passed = score_01 >= threshold
+        return EvaluationResult(
+            score=round(score_01, 3),
+            reasoning=str(data.get("reasoning", "")),
+            passed=passed,
+        )
+    except (json.JSONDecodeError, KeyError, ValueError):
+        # Fallback: surface the raw response for debugging
+        passed = "pass" in raw.lower() and "fail" not in raw.lower()
+        return EvaluationResult(
+            score=1.0 if passed else 0.0,
+            reasoning=f"[JSON parse failed] raw response: {raw[:300]}",
+            passed=passed,
+        )
