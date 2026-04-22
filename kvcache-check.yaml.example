@@ -1,0 +1,14 @@
+target_url: "http://localhost:8000"
+model: "meta-llama/Llama-3.1-8B-Instruct"
+api_key: "EMPTY"
+iterations: 3
+threshold: 0.7
+max_tokens: 512
+
+# Optional: use a separate, stronger model as judge
+# judge_url: "https://api.openai.com"
+# judge_model: "gpt-4o-mini"
+# judge_api_key: "sk-..."
+
+# Optional: save full run traces for review with kvcache-logs
+# log_file: "runs.jsonl"
