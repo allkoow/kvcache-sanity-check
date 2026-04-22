@@ -1,68 +1,65 @@
 scenarios:
-  # Documents are loaded in order. The question targets the FIRST document —
-  # the one whose KV blocks were computed earliest and are most likely evicted.
+  # Long docs loaded in order. Question targets the FIRST document —
+  # earliest KV blocks, highest eviction risk.
   - id: early_doc_recall
     description: "Recall content from the first document loaded (earliest KV blocks, highest eviction risk)"
     document_ids:
-      - doc_s1_python
-      - doc_m1_apollo
-      - doc_m2_dna
-      - doc_l1_french_revolution
-      - doc_s2_coffee
-    question: "Please summarize the first document I gave you. What is it about and what are two or three key facts from it?"
-    target_doc_id: doc_s1_python
+      - doc_history_of_the_internet
+      - doc_world_war_ii
+      - doc_climate_change
+      - doc_ancient_rome
+      - doc_black_death
+    question: "Please summarize the first document I gave you. What is it about and what are two or three specific facts from it?"
+    target_doc_id: doc_history_of_the_internet
     key_facts:
-      - Python
-      - programming language
-      - Guido van Rossum
+      - Internet
+      - ARPANET
+      - Tim Berners-Lee
 
   # Question targets a document from the middle of the context window.
   - id: middle_doc_recall
     description: "Recall content from a middle document (moderate eviction risk)"
     document_ids:
-      - doc_s2_coffee
-      - doc_s1_python
-      - doc_m1_apollo
-      - doc_m2_dna
-      - doc_l1_french_revolution
+      - doc_ancient_rome
+      - doc_machine_learning
+      - doc_world_war_ii
+      - doc_solar_system
+      - doc_quantum_mechanics
     question: "What was the third document I provided about? Give me a brief summary including two specific facts."
-    target_doc_id: doc_m1_apollo
+    target_doc_id: doc_world_war_ii
     key_facts:
-      - Apollo
-      - Moon
-      - NASA
+      - World War II
+      - Hitler
+      - "1939"
+
+  # Asks for a specific named fact — hard to guess without the right document.
+  - id: specific_fact_retrieval
+    description: "Retrieve a specific named fact from an early document"
+    document_ids:
+      - doc_black_death
+      - doc_climate_change
+      - doc_solar_system
+      - doc_machine_learning
+      - doc_human_genome
+    question: "Based only on the documents I provided, what is the name of the bacterium responsible for the Black Death?"
+    target_doc_id: doc_black_death
+    key_facts:
+      - Yersinia pestis
 
   # Simulates a user pasting documents into the same chat without starting a new
-  # session ("forgot to open a new chat"). Each turn is a self-contained
-  # "Summarize this text" request; the answer should always refer to the document
-  # in that specific turn, not to anything pasted earlier. Only pairs after the
-  # first are evaluated — the first pair has no prior cache to be contaminated by.
+  # session. Each turn is a self-contained "Summarize this text" request; the
+  # answer should always refer to the document in that specific turn. Only pairs
+  # after the first are evaluated — the first has no prior cache to be contaminated by.
   - id: sequential_summarize
     mode: sequential_pairs
     description: "Same-chat independent summarize requests; tests cross-turn KV cache contamination"
     evaluate_from_pair: 1
     pairs:
-      - doc_id: doc_l1_french_revolution
+      - doc_id: doc_ancient_rome
         question: "Summarize this text in two or three sentences."
-      - doc_id: doc_m1_apollo
+      - doc_id: doc_history_of_the_internet
         question: "Summarize this text in two or three sentences."
-      - doc_id: doc_s2_coffee
+      - doc_id: doc_black_death
         question: "Summarize this text in two or three sentences."
-      - doc_id: doc_s1_python
+      - doc_id: doc_world_war_ii
         question: "Summarize this text in two or three sentences."
-
-  # Asks for a specific named fact, harder to guess without the right document.
-  - id: specific_fact_retrieval
-    description: "Retrieve a named specific fact from an early document"
-    document_ids:
-      - doc_s2_coffee
-      - doc_m2_dna
-      - doc_l1_french_revolution
-      - doc_m1_apollo
-      - doc_s1_python
-    question: "Based only on the documents I provided, what country is cited as the origin of coffee cultivation, and what century did cultivation spread to the Arabian Peninsula?"
-    target_doc_id: doc_s2_coffee
-    key_facts:
-      - Ethiopia
-      - fifteenth century
-      - Yemen
