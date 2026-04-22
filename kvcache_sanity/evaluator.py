@@ -33,7 +33,10 @@ def _extract_json(raw: str) -> str:
     return raw  # give up; caller will get a parse error with the full text
 
 
-_JUDGE_PROMPT = """\
+_PROMPTS: dict[str, str] = {}
+
+# strict: fine-grained consistency scoring (default)
+_PROMPTS["strict"] = """\
 You are evaluating whether two answers to the same question are consistent and correct.
 
 Question asked: {question}
@@ -59,6 +62,36 @@ Respond with valid JSON only — no markdown, no explanation outside the JSON:
 {{"score": <int 0-10>, "reasoning": "<one or two sentences>", "verdict": "<pass|fail>"}}\
 """
 
+# topic: only catches wrong-document answers; ignores detail differences
+_PROMPTS["topic"] = """\
+You are checking whether an AI answer addresses the correct source document.
+
+Question asked: {question}
+
+REFERENCE answer (correct, from a clean recompute — use this to identify the expected topic):
+{reference_answer}
+
+TARGET answer (under test — may have used a corrupted KV cache):
+{target_answer}
+
+Your only job: determine whether the TARGET answer is about the SAME document or topic as the
+REFERENCE answer, or whether it is clearly about a COMPLETELY DIFFERENT document or topic.
+
+Do NOT penalise for different wording, missing details, extra information, or style.
+ONLY score low if the TARGET is clearly speaking about a different subject entirely.
+
+First identify the topic of each answer in a short phrase. Then score:
+  8–10 = same topic/document (even if details differ)
+  4–7  = ambiguous — possibly the right topic but hard to tell
+  0–3  = clearly about a different topic or document entirely
+
+Respond with valid JSON only — no markdown, no explanation outside the JSON:
+{{"reference_topic": "<topic of REFERENCE in a few words>", "target_topic": "<topic of TARGET in a few words>", "score": <int 0-10>, "reasoning": "<one sentence>", "verdict": "<pass|fail>"}}\
+"""
+
+PROMPT_NAMES = sorted(_PROMPTS)
+DEFAULT_PROMPT = "strict"
+
 
 def evaluate_answers(
     question: str,
@@ -68,18 +101,23 @@ def evaluate_answers(
     model: str,
     threshold: float = 0.7,
     judge_client: OpenAI | None = None,
+    judge_prompt: str = DEFAULT_PROMPT,
 ) -> EvaluationTrace:
     """Compare target_answer to reference_answer using LLM-as-judge.
+
+    judge_prompt selects which prompt template to use: "strict" (default,
+    fine-grained consistency scoring) or "topic" (only catches wrong-document
+    answers, ignores detail differences).
 
     The evaluation call itself uses a unique prefix to prevent cache hits,
     since the judge must not be influenced by prior cached state either.
 
-    If judge_client is provided it is used instead of client for the evaluation
-    call (useful when a more capable external model is available for judging).
-
     Returns an EvaluationTrace that bundles the EvaluationResult with the full
     judge message exchange and raw response for logging.
     """
+    if judge_prompt not in _PROMPTS:
+        raise ValueError(f"Unknown judge_prompt {judge_prompt!r}. Choose from: {PROMPT_NAMES}")
+
     eval_client = judge_client or client
     eval_prefix = str(uuid.uuid4())
 
@@ -93,7 +131,7 @@ def evaluate_answers(
         },
         {
             "role": "user",
-            "content": _JUDGE_PROMPT.format(
+            "content": _PROMPTS[judge_prompt].format(
                 question=question,
                 reference_answer=reference_answer,
                 target_answer=target_answer,
@@ -114,9 +152,14 @@ def evaluate_answers(
         data = json.loads(_extract_json(raw))
         score_01 = float(data["score"]) / 10.0
         passed = score_01 >= threshold
+        # For the topic prompt, prepend the identified topics to make failures
+        # immediately readable: "Ancient Rome → World War II: ..."
+        reasoning = str(data.get("reasoning", ""))
+        if "reference_topic" in data and "target_topic" in data:
+            reasoning = f"[{data['reference_topic']} → {data['target_topic']}] {reasoning}"
         result = EvaluationResult(
             score=round(score_01, 3),
-            reasoning=str(data.get("reasoning", "")),
+            reasoning=reasoning,
             passed=passed,
         )
     except (json.JSONDecodeError, KeyError, ValueError):

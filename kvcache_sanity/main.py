@@ -7,7 +7,7 @@ from openai import OpenAI
 from rich.console import Console
 
 from kvcache_sanity.corpus import load_documents
-from kvcache_sanity.evaluator import evaluate_answers
+from kvcache_sanity.evaluator import evaluate_answers, DEFAULT_PROMPT, PROMPT_NAMES
 from kvcache_sanity.logger import RunLogger
 from kvcache_sanity.models import EvaluationResult, EvaluationTrace, RunResult, Scenario, TestResult
 from kvcache_sanity.runner import (
@@ -77,7 +77,7 @@ def _load_scenarios(path: Path) -> list[Scenario]:
 
 def _run_single(
     *, scenario, documents, target_client, model, judge_model_name, judge_client,
-    threshold, max_tokens, iteration, all_results, run_logger, verbose,
+    threshold, max_tokens, judge_prompt, iteration, all_results, run_logger, verbose,
 ) -> None:
     error: str | None = None
     target_run = RunResult(answer="")
@@ -95,6 +95,7 @@ def _run_single(
             model=judge_model_name,
             threshold=threshold,
             judge_client=judge_client,
+            judge_prompt=judge_prompt,
         )
         result = TestResult(
             scenario_id=scenario.id, iteration=iteration, question=scenario.question,
@@ -119,7 +120,7 @@ def _run_single(
 
 def _run_sequential_pairs(
     *, scenario, documents, target_client, model, judge_model_name, judge_client,
-    threshold, max_tokens, iteration, all_results, run_logger, verbose,
+    threshold, max_tokens, judge_prompt, iteration, all_results, run_logger, verbose,
 ) -> None:
     pairs = scenario.pairs
     for pair_idx in range(scenario.evaluate_from_pair, len(pairs)):
@@ -145,6 +146,7 @@ def _run_sequential_pairs(
                 model=judge_model_name,
                 threshold=threshold,
                 judge_client=judge_client,
+                judge_prompt=judge_prompt,
             )
             result = TestResult(
                 scenario_id=f"{scenario.id}[{pair_label}]",
@@ -198,6 +200,10 @@ def _run_sequential_pairs(
               help="Directory of .txt document files. Defaults to the bundled corpus/.")
 @click.option("--max-tokens", default=512, show_default=True, type=int,
               help="Max tokens for model answer responses.")
+@click.option("--judge-prompt", default=DEFAULT_PROMPT, show_default=True,
+              type=click.Choice(PROMPT_NAMES),
+              help="Judge prompt style: 'strict' scores fine-grained consistency; "
+                   "'topic' only catches wrong-document answers.")
 @click.option("--log-file", default=None, type=click.Path(), metavar="PATH",
               help="Append full run traces (JSON Lines) to this file for later review with kvcache-logs.")
 @click.option("--verbose", "-v", is_flag=True,
@@ -206,7 +212,7 @@ def cli(
     target_url, model, api_key,
     judge_url, judge_model, judge_api_key,
     iterations, threshold, scenarios_file, corpus_dir,
-    max_tokens, log_file, verbose,
+    max_tokens, judge_prompt, log_file, verbose,
 ):
     """Sanity-check LLM output correctness when using offloaded KV cache.
 
@@ -233,6 +239,7 @@ def cli(
 
     run_logger = RunLogger(Path(log_file)) if log_file else None
 
+
     console.print("[bold]KV Cache Sanity Check[/]")
     console.print(f"Target : {target_base}  model={model}")
     console.print(f"Scenarios: {len(scenarios)}  iterations: {iterations}  threshold: {threshold}")
@@ -246,36 +253,17 @@ def cli(
         console.print(f"[bold cyan]{scenario.id}[/] — {scenario.description}")
 
         for i in range(1, iterations + 1):
+            common = dict(
+                scenario=scenario, documents=documents,
+                target_client=target_client, model=model,
+                judge_model_name=judge_model_name, judge_client=judge_client,
+                threshold=threshold, max_tokens=max_tokens, judge_prompt=judge_prompt,
+                iteration=i, all_results=all_results, run_logger=run_logger, verbose=verbose,
+            )
             if scenario.mode == "sequential_pairs":
-                _run_sequential_pairs(
-                    scenario=scenario,
-                    documents=documents,
-                    target_client=target_client,
-                    model=model,
-                    judge_model_name=judge_model_name,
-                    judge_client=judge_client,
-                    threshold=threshold,
-                    max_tokens=max_tokens,
-                    iteration=i,
-                    all_results=all_results,
-                    run_logger=run_logger,
-                    verbose=verbose,
-                )
+                _run_sequential_pairs(**common)
             else:
-                _run_single(
-                    scenario=scenario,
-                    documents=documents,
-                    target_client=target_client,
-                    model=model,
-                    judge_model_name=judge_model_name,
-                    judge_client=judge_client,
-                    threshold=threshold,
-                    max_tokens=max_tokens,
-                    iteration=i,
-                    all_results=all_results,
-                    run_logger=run_logger,
-                    verbose=verbose,
-                )
+                _run_single(**common)
 
         console.print()
 
