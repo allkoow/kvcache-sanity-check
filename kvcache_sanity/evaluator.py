@@ -78,7 +78,9 @@ Your only job: determine whether the TARGET answer is about the SAME document or
 REFERENCE answer, or whether it is clearly about a COMPLETELY DIFFERENT document or topic.
 
 Do NOT penalise for different wording, missing details, extra information, or style.
-ONLY score low if the TARGET is clearly speaking about a different subject entirely.
+Ignore how the source is labelled — "document", "book", "article", "text", "passage" all mean
+the same thing here. ONLY score low if the TARGET is clearly speaking about a different
+subject entirely (e.g. Ancient Rome when the reference is about the Internet).
 
 First identify the topic of each answer in a short phrase. Then score:
   8–10 = same topic/document (even if details differ)
