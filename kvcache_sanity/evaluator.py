@@ -38,13 +38,13 @@ You are evaluating whether two answers to the same question are consistent and c
 
 Question asked: {question}
 
-Answer A (reference — generated without any cache, treated as ground truth):
+REFERENCE answer (generated with a clean recompute, no cached KV blocks — treat as ground truth):
 {reference_answer}
 
-Answer B (under test — generated using potentially cached KV blocks):
+TARGET answer (generated using potentially cached KV blocks — this is what you are evaluating):
 {target_answer}
 
-Evaluate whether Answer B is consistent with Answer A on:
+Evaluate whether the TARGET answer is consistent with the REFERENCE answer on:
 1. Topic/document addressed — does it talk about the same thing?
 2. Key facts and information — are the facts consistent?
 3. Overall accuracy — would a reader get the same understanding?
