@@ -1,4 +1,5 @@
 import json
+import re
 import uuid
 from openai import OpenAI
 from kvcache_sanity.models import EvaluationResult, EvaluationTrace
@@ -103,7 +104,7 @@ def evaluate_answers(
     response = eval_client.chat.completions.create(
         model=model,
         messages=messages,
-        max_tokens=512,
+        max_tokens=1024,
         temperature=0.0,
     )
 
@@ -119,12 +120,31 @@ def evaluate_answers(
             passed=passed,
         )
     except (json.JSONDecodeError, KeyError, ValueError):
-        passed = "pass" in raw.lower() and "fail" not in raw.lower()
-        result = EvaluationResult(
-            score=1.0 if passed else 0.0,
-            reasoning=f"[JSON parse failed] raw response: {raw[:300]}",
-            passed=passed,
-        )
+        if not raw:
+            result = EvaluationResult(
+                score=0.0,
+                reasoning="[empty response from judge — server returned no content]",
+                passed=False,
+            )
+        else:
+            # Truncated JSON fallback: extract score with regex if present
+            score_match = re.search(r'"score"\s*:\s*(\d+)', raw)
+            verdict_match = re.search(r'"verdict"\s*:\s*"(pass|fail)"', raw, re.IGNORECASE)
+            if score_match:
+                score_01 = float(score_match.group(1)) / 10.0
+                passed = verdict_match.group(1).lower() == "pass" if verdict_match else score_01 >= threshold
+                result = EvaluationResult(
+                    score=round(score_01, 3),
+                    reasoning=f"[truncated JSON, score extracted] {raw[:200]}",
+                    passed=passed,
+                )
+            else:
+                passed = "pass" in raw.lower() and "fail" not in raw.lower()
+                result = EvaluationResult(
+                    score=1.0 if passed else 0.0,
+                    reasoning=f"[JSON parse failed] raw response: {raw[:300]}",
+                    passed=passed,
+                )
 
     return EvaluationTrace(
         result=result,
