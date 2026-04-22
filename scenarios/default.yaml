@@ -32,6 +32,25 @@ scenarios:
       - Moon
       - NASA
 
+  # Simulates a user pasting documents into the same chat without starting a new
+  # session ("forgot to open a new chat"). Each turn is a self-contained
+  # "Summarize this text" request; the answer should always refer to the document
+  # in that specific turn, not to anything pasted earlier. Only pairs after the
+  # first are evaluated — the first pair has no prior cache to be contaminated by.
+  - id: sequential_summarize
+    mode: sequential_pairs
+    description: "Same-chat independent summarize requests; tests cross-turn KV cache contamination"
+    evaluate_from_pair: 1
+    pairs:
+      - doc_id: doc_l1_french_revolution
+        question: "Summarize this text in two or three sentences."
+      - doc_id: doc_m1_apollo
+        question: "Summarize this text in two or three sentences."
+      - doc_id: doc_s2_coffee
+        question: "Summarize this text in two or three sentences."
+      - doc_id: doc_s1_python
+        question: "Summarize this text in two or three sentences."
+
   # Asks for a specific named fact, harder to guess without the right document.
   - id: specific_fact_retrieval
     description: "Retrieve a named specific fact from an early document"

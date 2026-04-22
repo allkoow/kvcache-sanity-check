@@ -10,7 +10,12 @@ from kvcache_sanity.corpus import load_documents
 from kvcache_sanity.evaluator import evaluate_answers
 from kvcache_sanity.logger import RunLogger
 from kvcache_sanity.models import EvaluationResult, EvaluationTrace, RunResult, Scenario, TestResult
-from kvcache_sanity.runner import get_reference_answer, run_scenario
+from kvcache_sanity.runner import (
+    get_reference_answer,
+    get_reference_pair_answer,
+    run_scenario,
+    run_sequential_pair,
+)
 from kvcache_sanity import report
 
 console = Console()
@@ -68,6 +73,100 @@ def _load_scenarios(path: Path) -> list[Scenario]:
     with open(path) as f:
         data = yaml.safe_load(f)
     return [Scenario(**s) for s in data["scenarios"]]
+
+
+def _run_single(
+    *, scenario, documents, target_client, model, judge_model_name, judge_client,
+    threshold, max_tokens, iteration, all_results, run_logger, verbose,
+) -> None:
+    error: str | None = None
+    target_run = RunResult(answer="")
+    reference_run = RunResult(answer="")
+    trace = EvaluationTrace(result=EvaluationResult(score=0.0, reasoning="", passed=False))
+
+    try:
+        target_run = run_scenario(scenario, documents, target_client, model, max_tokens=max_tokens)
+        reference_run = get_reference_answer(scenario, documents, target_client, model, max_tokens=max_tokens)
+        trace = evaluate_answers(
+            question=scenario.question,
+            target_answer=target_run.answer,
+            reference_answer=reference_run.answer,
+            client=target_client,
+            model=judge_model_name,
+            threshold=threshold,
+            judge_client=judge_client,
+        )
+        result = TestResult(
+            scenario_id=scenario.id, iteration=iteration, question=scenario.question,
+            target_answer=target_run.answer, reference_answer=reference_run.answer,
+            evaluation=trace.result,
+        )
+    except Exception as exc:
+        error = str(exc)
+        result = TestResult(
+            scenario_id=scenario.id, iteration=iteration, question=scenario.question,
+            target_answer=target_run.answer, reference_answer=reference_run.answer,
+            evaluation=EvaluationResult(score=0.0, reasoning=str(exc), passed=False),
+            error=error,
+        )
+
+    all_results.append(result)
+    report.print_result(result, verbose=verbose)
+    if run_logger:
+        run_logger.log(scenario=scenario, iteration=iteration,
+                       target=target_run, reference=reference_run, trace=trace, error=error)
+
+
+def _run_sequential_pairs(
+    *, scenario, documents, target_client, model, judge_model_name, judge_client,
+    threshold, max_tokens, iteration, all_results, run_logger, verbose,
+) -> None:
+    pairs = scenario.pairs
+    for pair_idx in range(scenario.evaluate_from_pair, len(pairs)):
+        pair = pairs[pair_idx]
+        error: str | None = None
+        target_run = RunResult(answer="")
+        reference_run = RunResult(answer="")
+        trace = EvaluationTrace(result=EvaluationResult(score=0.0, reasoning="", passed=False))
+
+        pair_label = f"pair {pair_idx + 1}/{len(pairs)} (doc={pair.doc_id})"
+        try:
+            target_run = run_sequential_pair(
+                pairs, documents, target_client, model, pair_idx, max_tokens=max_tokens
+            )
+            reference_run = get_reference_pair_answer(
+                pairs, documents, target_client, model, pair_idx, max_tokens=max_tokens
+            )
+            trace = evaluate_answers(
+                question=pair.question,
+                target_answer=target_run.answer,
+                reference_answer=reference_run.answer,
+                client=target_client,
+                model=judge_model_name,
+                threshold=threshold,
+                judge_client=judge_client,
+            )
+            result = TestResult(
+                scenario_id=f"{scenario.id}[{pair_label}]",
+                iteration=iteration, question=pair.question,
+                target_answer=target_run.answer, reference_answer=reference_run.answer,
+                evaluation=trace.result,
+            )
+        except Exception as exc:
+            error = str(exc)
+            result = TestResult(
+                scenario_id=f"{scenario.id}[{pair_label}]",
+                iteration=iteration, question=pair.question,
+                target_answer=target_run.answer, reference_answer=reference_run.answer,
+                evaluation=EvaluationResult(score=0.0, reasoning=str(exc), passed=False),
+                error=error,
+            )
+
+        all_results.append(result)
+        report.print_result(result, verbose=verbose)
+        if run_logger:
+            run_logger.log(scenario=scenario, iteration=iteration,
+                           target=target_run, reference=reference_run, trace=trace, error=error)
 
 
 @click.command(cls=_ConfigFileCommand)
@@ -147,60 +246,35 @@ def cli(
         console.print(f"[bold cyan]{scenario.id}[/] — {scenario.description}")
 
         for i in range(1, iterations + 1):
-            error: str | None = None
-            target_run = RunResult(answer="")
-            reference_run = RunResult(answer="")
-            trace = EvaluationTrace(
-                result=EvaluationResult(score=0.0, reasoning="", passed=False)
-            )
-
-            try:
-                target_run = run_scenario(
-                    scenario, documents, target_client, model, max_tokens=max_tokens
-                )
-                reference_run = get_reference_answer(
-                    scenario, documents, target_client, model, max_tokens=max_tokens
-                )
-                trace = evaluate_answers(
-                    question=scenario.question,
-                    target_answer=target_run.answer,
-                    reference_answer=reference_run.answer,
-                    client=target_client,
-                    model=judge_model_name,
-                    threshold=threshold,
-                    judge_client=judge_client,
-                )
-                result = TestResult(
-                    scenario_id=scenario.id,
-                    iteration=i,
-                    question=scenario.question,
-                    target_answer=target_run.answer,
-                    reference_answer=reference_run.answer,
-                    evaluation=trace.result,
-                )
-            except Exception as exc:
-                error = str(exc)
-                result = TestResult(
-                    scenario_id=scenario.id,
-                    iteration=i,
-                    question=scenario.question,
-                    target_answer=target_run.answer,
-                    reference_answer=reference_run.answer,
-                    evaluation=EvaluationResult(score=0.0, reasoning=str(exc), passed=False),
-                    error=error,
-                )
-
-            all_results.append(result)
-            report.print_result(result, verbose=verbose)
-
-            if run_logger:
-                run_logger.log(
+            if scenario.mode == "sequential_pairs":
+                _run_sequential_pairs(
                     scenario=scenario,
+                    documents=documents,
+                    target_client=target_client,
+                    model=model,
+                    judge_model_name=judge_model_name,
+                    judge_client=judge_client,
+                    threshold=threshold,
+                    max_tokens=max_tokens,
                     iteration=i,
-                    target=target_run,
-                    reference=reference_run,
-                    trace=trace,
-                    error=error,
+                    all_results=all_results,
+                    run_logger=run_logger,
+                    verbose=verbose,
+                )
+            else:
+                _run_single(
+                    scenario=scenario,
+                    documents=documents,
+                    target_client=target_client,
+                    model=model,
+                    judge_model_name=judge_model_name,
+                    judge_client=judge_client,
+                    threshold=threshold,
+                    max_tokens=max_tokens,
+                    iteration=i,
+                    all_results=all_results,
+                    run_logger=run_logger,
+                    verbose=verbose,
                 )
 
         console.print()

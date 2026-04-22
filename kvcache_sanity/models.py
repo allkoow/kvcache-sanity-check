@@ -10,14 +10,24 @@ class Document(BaseModel):
     approximate_tokens: int
 
 
+class ScenarioPair(BaseModel):
+    """A single (document, question) pair used in sequential_pairs mode."""
+    doc_id: str
+    question: str
+
+
 class Scenario(BaseModel):
     id: str
     description: str
-    document_ids: list[str]  # ordered; loaded into context in this sequence
-    question: str
-    target_doc_id: str  # which document the question is about (for metadata/reporting)
-    # key_facts: reserved for future keyword-based evaluation fallback
-    key_facts: list[str] = []
+    # --- multi_turn_recall mode ---
+    document_ids: list[str] = []   # ordered; loaded into context in this sequence
+    question: str = ""
+    target_doc_id: str = ""        # which document the question is about
+    key_facts: list[str] = []      # reserved for future keyword-based evaluation fallback
+    # --- sequential_pairs mode ---
+    mode: str = "multi_turn_recall"
+    pairs: list[ScenarioPair] = []
+    evaluate_from_pair: int = 1    # skip this many leading pairs before evaluating
 
 
 class EvaluationResult(BaseModel):

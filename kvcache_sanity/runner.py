@@ -1,6 +1,6 @@
 import uuid
 from openai import OpenAI
-from kvcache_sanity.models import Scenario, Document, RunResult
+from kvcache_sanity.models import Scenario, ScenarioPair, Document, RunResult
 
 # Short hardcoded acknowledgment so conversation structure is identical
 # between target and reference runs. This ensures the only variable is
@@ -80,3 +80,81 @@ def get_reference_answer(
     """
     prefix = str(uuid.uuid4())
     return run_scenario(scenario, documents, client, model, prefix, max_tokens)
+
+
+# ---------------------------------------------------------------------------
+# sequential_pairs mode
+# ---------------------------------------------------------------------------
+
+_PAIRS_ACK = "Got it."
+
+
+def build_pairs_messages(
+    pairs: list[ScenarioPair],
+    documents: dict[str, Document],
+    up_to_index: int,
+    unique_prefix: str | None = None,
+) -> list[dict]:
+    """Build a multi-turn conversation for sequential_pairs mode.
+
+    Simulates a user who pastes documents with questions into the same chat
+    session without ever starting a fresh conversation — each earlier pair
+    primes the KV cache. The conversation is truncated after the question at
+    up_to_index so the caller can capture that turn's answer.
+
+    Earlier assistant turns use a short hardcoded ACK so the conversation
+    structure is identical between target and reference runs.
+    """
+    system_content = "You are a helpful assistant."
+    if unique_prefix:
+        system_content = f"[{unique_prefix}] " + system_content
+
+    messages: list[dict] = [{"role": "system", "content": system_content}]
+
+    for i, pair in enumerate(pairs[:up_to_index + 1]):
+        doc = documents[pair.doc_id]
+        messages.append({
+            "role": "user",
+            "content": f"{doc.content}\n\n{pair.question}",
+        })
+        if i < up_to_index:
+            messages.append({"role": "assistant", "content": _PAIRS_ACK})
+
+    return messages
+
+
+def run_sequential_pair(
+    pairs: list[ScenarioPair],
+    documents: dict[str, Document],
+    client: OpenAI,
+    model: str,
+    pair_index: int,
+    unique_prefix: str | None = None,
+    max_tokens: int = 512,
+) -> RunResult:
+    """Run the conversation up to pair_index and return the answer for that pair."""
+    messages = build_pairs_messages(pairs, documents, pair_index, unique_prefix)
+    response = client.chat.completions.create(
+        model=model,
+        messages=messages,
+        max_tokens=max_tokens,
+        temperature=0.1,
+    )
+    return RunResult(
+        answer=response.choices[0].message.content or "",
+        messages=messages,
+        unique_prefix=unique_prefix,
+    )
+
+
+def get_reference_pair_answer(
+    pairs: list[ScenarioPair],
+    documents: dict[str, Document],
+    client: OpenAI,
+    model: str,
+    pair_index: int,
+    max_tokens: int = 512,
+) -> RunResult:
+    """Same as run_sequential_pair but with a UUID prefix to force a cache miss."""
+    prefix = str(uuid.uuid4())
+    return run_sequential_pair(pairs, documents, client, model, pair_index, prefix, max_tokens)
