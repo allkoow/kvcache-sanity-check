@@ -19,6 +19,7 @@ dependencies = [
 [project.scripts]
 kvcache-check = "kvcache_sanity.main:cli"
 kvcache-logs = "kvcache_sanity.tui:tui"
+kvcache-replay = "kvcache_sanity.replay:replay"
 
 [tool.hatch.build.targets.wheel]
 packages = ["kvcache_sanity"]
