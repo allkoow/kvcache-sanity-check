@@ -8,26 +8,21 @@ The primary target is [LMCache](https://github.com/LMCache/LMCache) with segment
 
 Each test scenario loads several documents into the model's context through a multi-turn conversation, then asks a question that requires recalling a specific document. Scenarios are designed so the question targets a document whose answer is unambiguous — answering from the wrong document is obvious.
 
-For each scenario, the tool generates a single stable UUID (the *target prefix*) and runs the scenario multiple times using that prefix. Because KV caches are keyed on the full token prefix:
-
-- **Iteration 1** is a cold start — no blocks are cached yet for this prefix. Any failure here is a server-side bug unrelated to caching.
-- **Iteration 2+** can hit KV blocks cached by iteration 1, which LMCache may have offloaded to CPU/disk. These iterations test whether the restored or recomputed blocks are correct.
-
-A separate *reference* call uses a different UUID (guaranteeing a full recompute) and is run once per scenario as ground truth. The model itself acts as judge on each iteration, also UUID-prefixed to bust its own cache.
+For each scenario, the tool generates one UUID shared by the reference call and all target iterations. The reference call runs **first**, giving the server a clean full recompute that both establishes the ground truth answer and warms the KV cache. Every subsequent target iteration reuses the same UUID, so it hits the blocks cached by the reference call — which LMCache may have offloaded to CPU/disk in the meantime.
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  Reference call (unique UUID)  →  answer  (clean recompute) │
-│                                                             │
-│  Target iter 1  (stable UUID)  →  answer  (cold start)      │
-│  Target iter 2  (stable UUID)  →  answer  (from cache)      │
-│  Target iter N  (stable UUID)  →  answer  (from cache)      │
-│                                                             │
-│  Judge call (unique UUID)  →  score + pass/fail per iter    │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│  Reference call  (UUID X)  →  answer  (clean recompute, warms cache) │
+│                                                                  │
+│  Target iter 1   (UUID X)  →  answer  (from cache)              │
+│  Target iter 2   (UUID X)  →  answer  (from cache)              │
+│  Target iter N   (UUID X)  →  answer  (from cache)              │
+│                                                                  │
+│  Judge call (fresh UUID)  →  score + pass/fail per iter          │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-A failure that appears on iteration 2+ but not iteration 1 is strong evidence of a KV cache recomputation bug rather than a model or prompt issue.
+Every target iteration exercises the cache equally — there is no cold-start iteration. A divergence between any target answer and the reference is a KV cache correctness bug.
 
 ## Installation
 

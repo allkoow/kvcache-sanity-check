@@ -80,15 +80,18 @@ def _run_scenario_iterations(
     *, scenario, documents, target_client, model, judge_model_name, judge_client,
     threshold, max_tokens, judge_prompt, iterations, all_results, run_logger, verbose,
 ) -> None:
-    # One stable prefix shared across all iterations so iteration 2+ hit KV
-    # blocks cached by iteration 1. Reference uses a separate UUID (generated
-    # inside get_reference_answer) and is run once as ground truth.
-    target_prefix = str(uuid.uuid4())
+    # Reference runs first with a shared UUID, warming the KV cache.
+    # All target iterations reuse the same UUID so they hit blocks cached
+    # by the reference call — every iteration exercises the cache equally.
+    shared_prefix = str(uuid.uuid4())
 
     reference_run = RunResult(answer="")
     ref_error: str | None = None
     try:
-        reference_run = get_reference_answer(scenario, documents, target_client, model, max_tokens=max_tokens)
+        reference_run = get_reference_answer(
+            scenario, documents, target_client, model,
+            max_tokens=max_tokens, prefix=shared_prefix,
+        )
     except Exception as exc:
         ref_error = str(exc)
 
@@ -108,7 +111,7 @@ def _run_scenario_iterations(
             try:
                 target_run = run_scenario(
                     scenario, documents, target_client, model,
-                    unique_prefix=target_prefix, max_tokens=max_tokens,
+                    unique_prefix=shared_prefix, max_tokens=max_tokens,
                 )
                 trace = evaluate_answers(
                     question=scenario.question,
@@ -146,9 +149,9 @@ def _run_sequential_pairs(
     threshold, max_tokens, judge_prompt, iterations, all_results, run_logger, verbose,
 ) -> None:
     pairs = scenario.pairs
-    # One stable prefix shared across all pairs and iterations so that
-    # iteration 2+ of each pair can hit KV blocks from iteration 1.
-    target_prefix = str(uuid.uuid4())
+    # Reference runs first with a shared UUID per scenario, warming the KV cache.
+    # All target iterations reuse the same UUID so every iteration exercises the cache.
+    shared_prefix = str(uuid.uuid4())
 
     for pair_idx in range(scenario.evaluate_from_pair, len(pairs)):
         pair = pairs[pair_idx]
@@ -158,7 +161,8 @@ def _run_sequential_pairs(
         ref_error: str | None = None
         try:
             reference_run = get_reference_pair_answer(
-                pairs, documents, target_client, model, pair_idx, max_tokens=max_tokens
+                pairs, documents, target_client, model, pair_idx,
+                max_tokens=max_tokens, prefix=shared_prefix,
             )
         except Exception as exc:
             ref_error = str(exc)
@@ -180,7 +184,7 @@ def _run_sequential_pairs(
                 try:
                     target_run = run_sequential_pair(
                         pairs, documents, target_client, model, pair_idx,
-                        unique_prefix=target_prefix, max_tokens=max_tokens,
+                        unique_prefix=shared_prefix, max_tokens=max_tokens,
                     )
                     trace = evaluate_answers(
                         question=pair.question,

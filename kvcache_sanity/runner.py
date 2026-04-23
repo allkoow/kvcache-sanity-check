@@ -128,14 +128,16 @@ def get_reference_answer(
     client: OpenAI,
     model: str,
     max_tokens: int = 512,
+    prefix: str | None = None,
 ) -> RunResult:
-    """Run the scenario with a unique prefix to force a full KV cache miss.
+    """Run the scenario with a cache-busting prefix to force a full KV cache miss.
 
-    The UUID prefix is placed at the start of the system message. Because KV
-    caches are keyed on the full token prefix, any difference in the first token
-    guarantees that no cached blocks are reused for this call.
+    If prefix is supplied it is reused (so subsequent target calls with the same
+    prefix will hit blocks cached by this reference call). If omitted a fresh UUID
+    is generated, which is appropriate when the caller wants an isolated ground truth.
     """
-    prefix = str(uuid.uuid4())
+    if prefix is None:
+        prefix = str(uuid.uuid4())
     return run_scenario(scenario, documents, client, model, prefix, max_tokens)
 
 
@@ -217,7 +219,13 @@ def get_reference_pair_answer(
     model: str,
     pair_index: int,
     max_tokens: int = 512,
+    prefix: str | None = None,
 ) -> RunResult:
-    """Same as run_sequential_pair but with a UUID prefix to force a cache miss."""
-    prefix = str(uuid.uuid4())
+    """Same as run_sequential_pair but with a cache-busting prefix to force a cache miss.
+
+    If prefix is supplied it is reused so subsequent target calls with the same
+    prefix will hit blocks cached by this reference call.
+    """
+    if prefix is None:
+        prefix = str(uuid.uuid4())
     return run_sequential_pair(pairs, documents, client, model, pair_index, prefix, max_tokens)
