@@ -118,9 +118,12 @@ def build_pairs_messages(
 
     for i, pair in enumerate(pairs[:up_to_index + 1]):
         doc = documents[pair.doc_id]
+        # Lead with the question so the model knows what to look for before
+        # reading the document, and the boundary is unambiguous.
+        q = pair.question[0].lower() + pair.question[1:]  # merge into preamble
         messages.append({
             "role": "user",
-            "content": f"<document>\n{doc.content}\n</document>\n\n{pair.question}",
+            "content": f"Please read the document below and {q}\n\n<document>\n{doc.content}\n</document>",
         })
         if i < up_to_index:
             messages.append({"role": "assistant", "content": _PAIRS_ACK})
