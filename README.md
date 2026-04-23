@@ -6,17 +6,28 @@ The primary target is [LMCache](https://github.com/LMCache/LMCache) with segment
 
 ## How it works
 
-Each test scenario loads several documents into the model's context through a multi-turn conversation, then asks a question about one of the **earlier** documents — the ones whose KV blocks were computed first and are most likely to have been evicted or incorrectly recomputed.
+Each test scenario loads several documents into the model's context through a multi-turn conversation, then asks a question that requires recalling a specific document. Scenarios are designed so the question targets a document whose answer is unambiguous — answering from the wrong document is obvious.
 
-To get a trustworthy reference answer without spinning up a second model, the same server is called again with a unique UUID injected at the start of the system message. Because KV caches are keyed on the full token prefix, a single changed token at position 0 guarantees a complete cache miss and a clean recompute. The two answers are then compared using the model itself as a judge (also UUID-prefixed, also cache-busted).
+For each scenario, the tool generates a single stable UUID (the *target prefix*) and runs the scenario multiple times using that prefix. Because KV caches are keyed on the full token prefix:
+
+- **Iteration 1** is a cold start — no blocks are cached yet for this prefix. Any failure here is a server-side bug unrelated to caching.
+- **Iteration 2+** can hit KV blocks cached by iteration 1, which LMCache may have offloaded to CPU/disk. These iterations test whether the restored or recomputed blocks are correct.
+
+A separate *reference* call uses a different UUID (guaranteeing a full recompute) and is run once per scenario as ground truth. The model itself acts as judge on each iteration, also UUID-prefixed to bust its own cache.
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  Target call  →  answer    (may use cached blocks)      │
-│  Reference call (UUID prefix)  →  answer  (clean)       │
-│  Judge call (UUID prefix)  →  score + pass/fail          │
-└─────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│  Reference call (unique UUID)  →  answer  (clean recompute) │
+│                                                             │
+│  Target iter 1  (stable UUID)  →  answer  (cold start)      │
+│  Target iter 2  (stable UUID)  →  answer  (from cache)      │
+│  Target iter N  (stable UUID)  →  answer  (from cache)      │
+│                                                             │
+│  Judge call (unique UUID)  →  score + pass/fail per iter    │
+└─────────────────────────────────────────────────────────────┘
 ```
+
+A failure that appears on iteration 2+ but not iteration 1 is strong evidence of a KV cache recomputation bug rather than a model or prompt issue.
 
 ## Installation
 
@@ -98,10 +109,12 @@ Key bindings: `j`/`k` or arrow keys to navigate, `q` to quit.
 
 | Scenario | Mode | What it tests |
 |---|---|---|
-| `early_doc_recall` | multi-turn | Recall the **first** document loaded — highest eviction risk |
-| `middle_doc_recall` | multi-turn | Recall the **third** document loaded — moderate eviction risk |
-| `specific_fact_retrieval` | multi-turn | Retrieve a specific named fact from an early document |
-| `sequential_summarize` | sequential pairs | Independent "summarize this" requests in the same chat — tests cross-turn cache contamination |
+| `early_doc_recall` | multi-turn | Recall the **first** document loaded — tests recomputation of blocks near the attention sinks |
+| `middle_doc_recall` | multi-turn | Recall the **third** document loaded — tests recomputation of mid-sequence blocks |
+| `specific_fact_retrieval` | multi-turn | Retrieve a specific named entity from an early document — catches value-tensor corruption (correct topic, wrong fact) |
+| `sequential_summarize` | sequential pairs | Independent summarize requests in the same chat — tests cross-turn cache contamination |
+
+With stochastic eviction, all blocks have equal probability of being evicted. Early-document scenarios are still valuable because the first tokens of the sequence act as "attention sinks" — they absorb a disproportionate share of attention across all layers — so recomputation errors there have outsized impact on output quality.
 
 The corpus uses full Wikipedia articles (~5,000–15,000 words each) downloaded via `scripts/download_corpus.py`. Topics are distinct enough that answering about the wrong one is unambiguous.
 
