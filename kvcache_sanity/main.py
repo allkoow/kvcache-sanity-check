@@ -127,6 +127,7 @@ def _run_scenario_iterations(
                     scenario_id=scenario.id, iteration=i, question=scenario.question,
                     target_answer=target_run.answer, reference_answer=reference_run.answer,
                     evaluation=trace.result,
+                    target_request_id=target_run.request_id,
                 )
             except Exception as exc:
                 error = str(exc)
@@ -201,6 +202,7 @@ def _run_sequential_pairs(
                         iteration=i, question=pair.question,
                         target_answer=target_run.answer, reference_answer=reference_run.answer,
                         evaluation=trace.result,
+                        target_request_id=target_run.request_id,
                     )
                 except Exception as exc:
                     error = str(exc)

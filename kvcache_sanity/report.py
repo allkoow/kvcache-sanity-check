@@ -16,6 +16,8 @@ def print_result(result: TestResult, verbose: bool = False) -> None:
     console.print(f"  iter {result.iteration}: {status}  score={score_pct}  {result.evaluation.reasoning}")
 
     if verbose or not result.evaluation.passed:
+        if result.target_request_id:
+            console.print(f"    [dim]request_id: {result.target_request_id}[/]")
         console.print(f"    [dim]Target   : {result.target_answer[:300].replace(chr(10), ' ')}[/]")
         console.print(f"    [dim]Reference: {result.reference_answer[:300].replace(chr(10), ' ')}[/]")
 

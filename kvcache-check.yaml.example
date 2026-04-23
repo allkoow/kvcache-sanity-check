@@ -4,7 +4,7 @@ api_key: "EMPTY"
 iterations: 3
 threshold: 0.7
 judge_prompt: "topic"  # "strict" (fine-grained) or "topic" (wrong-document only)
-max_tokens: 512
+max_tokens: 1024
 
 # Optional: use a separate, stronger model as judge
 # judge_url: "https://api.openai.com"

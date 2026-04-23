@@ -44,6 +44,7 @@ class TestResult(BaseModel):
     reference_answer: str
     evaluation: EvaluationResult
     error: Optional[str] = None
+    target_request_id: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -58,6 +59,8 @@ class RunResult:
     unique_prefix: Optional[str] = None
     finish_reason: str = ""
     completion_tokens: int = 0
+    request_id: str = ""
+    request_time: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +93,9 @@ class RunLog(BaseModel):
     reference_prefix: str
     target_answer: str
     reference_answer: str
+    target_request_id: str = ""
+    reference_request_id: str = ""
+    target_request_time: str = ""
     judge_messages: list[MessageLog]
     judge_raw_response: str
     evaluation: EvaluationResult

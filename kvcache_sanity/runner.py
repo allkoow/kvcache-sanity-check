@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timezone
 from openai import OpenAI
 from rich.console import Console as _Console
 from kvcache_sanity.models import Scenario, ScenarioPair, Document, RunResult
@@ -13,15 +14,19 @@ def _call_api(
     messages: list[dict],
     max_tokens: int,
     label: str = "",
-) -> tuple[str, str, int]:
+) -> tuple[str, str, int, str, str]:
     """Call the chat completions API, retrying on empty answers and warning on truncation.
 
-    Returns (answer, finish_reason, completion_tokens).
+    Returns (answer, finish_reason, completion_tokens, request_id, request_time).
+    request_time is an ISO-8601 UTC timestamp captured immediately after the response
+    is received — useful for correlating with server-side logs.
     """
     tag = f" [{label}]" if label else ""
     answer = ""
     finish_reason = ""
     completion_tokens = 0
+    request_id = ""
+    request_time = ""
 
     for attempt in range(_MAX_EMPTY_RETRIES + 1):
         response = client.chat.completions.create(
@@ -30,33 +35,37 @@ def _call_api(
             max_tokens=max_tokens,
             temperature=0.1,
         )
+        request_time = datetime.now(timezone.utc).isoformat()
         choice = response.choices[0]
         answer = choice.message.content or ""
         finish_reason = choice.finish_reason or ""
         completion_tokens = (response.usage.completion_tokens if response.usage else 0)
+        request_id = response.id or ""
 
         if finish_reason == "length":
             _stderr.print(
                 f"[yellow]WARNING[/yellow]: response truncated at {max_tokens} tokens "
-                f"(completion_tokens={completion_tokens}){tag}. "
+                f"(completion_tokens={completion_tokens}, request_id={request_id}){tag}. "
                 "Consider increasing --max-tokens."
             )
 
         if answer.strip():
-            return answer, finish_reason, completion_tokens
+            return answer, finish_reason, completion_tokens, request_id, request_time
 
         if attempt < _MAX_EMPTY_RETRIES:
             _stderr.print(
                 f"[yellow]WARNING[/yellow]: empty answer on attempt {attempt + 1}/{_MAX_EMPTY_RETRIES}{tag}. "
-                f"finish_reason={finish_reason!r}, completion_tokens={completion_tokens}. Retrying…"
+                f"finish_reason={finish_reason!r}, completion_tokens={completion_tokens}, "
+                f"request_id={request_id}. Retrying…"
             )
         else:
             _stderr.print(
                 f"[red]WARNING[/red]: empty answer after {_MAX_EMPTY_RETRIES} retries{tag}. "
-                f"finish_reason={finish_reason!r}, completion_tokens={completion_tokens}. Giving up."
+                f"finish_reason={finish_reason!r}, completion_tokens={completion_tokens}, "
+                f"request_id={request_id}. Giving up."
             )
 
-    return answer, finish_reason, completion_tokens
+    return answer, finish_reason, completion_tokens, request_id, request_time
 
 # Short hardcoded acknowledgment so conversation structure is identical
 # between target and reference runs. This ensures the only variable is
@@ -112,13 +121,15 @@ def run_scenario(
 ) -> RunResult:
     messages = build_messages(scenario, documents, unique_prefix)
     label = f"scenario={scenario.id}, prefix={'ref' if unique_prefix else 'target'}"
-    answer, finish_reason, completion_tokens = _call_api(client, model, messages, max_tokens, label)
+    answer, finish_reason, completion_tokens, request_id, request_time = _call_api(client, model, messages, max_tokens, label)
     return RunResult(
         answer=answer,
         messages=messages,
         unique_prefix=unique_prefix,
         finish_reason=finish_reason,
         completion_tokens=completion_tokens,
+        request_id=request_id,
+        request_time=request_time,
     )
 
 
@@ -202,13 +213,15 @@ def run_sequential_pair(
     """Run the conversation up to pair_index and return the answer for that pair."""
     messages = build_pairs_messages(pairs, documents, pair_index, unique_prefix)
     label = f"pair={pair_index}, prefix={'ref' if unique_prefix else 'target'}"
-    answer, finish_reason, completion_tokens = _call_api(client, model, messages, max_tokens, label)
+    answer, finish_reason, completion_tokens, request_id, request_time = _call_api(client, model, messages, max_tokens, label)
     return RunResult(
         answer=answer,
         messages=messages,
         unique_prefix=unique_prefix,
         finish_reason=finish_reason,
         completion_tokens=completion_tokens,
+        request_id=request_id,
+        request_time=request_time,
     )
 
 

@@ -74,7 +74,13 @@ class DetailPane(VerticalScroll):
                 f"[{style}]{verdict}[/]  score={score_pct}",
             )
         )
-        self.mount(Static(f"[dim]{log.timestamp}[/dim]"))
+        meta_parts = [f"[dim]{log.timestamp}[/dim]"]
+        if log.target_request_time:
+            meta_parts.append(f"[dim]target @ {log.target_request_time}[/dim]")
+        if log.target_request_id:
+            meta_parts.append(f"[dim]request_id: {log.target_request_id}[/dim]")
+        for part in meta_parts:
+            self.mount(Static(part))
         self.mount(Static(""))
 
         if log.error:
@@ -90,9 +96,12 @@ class DetailPane(VerticalScroll):
             collapsed=True,
         ))
 
+        target_title = "Target answer"
+        if log.target_request_id:
+            target_title += f"  (request_id: {log.target_request_id})"
         self.mount(Collapsible(
             Static(log.target_answer),
-            title="Target answer",
+            title=target_title,
             collapsed=False,
         ))
 
