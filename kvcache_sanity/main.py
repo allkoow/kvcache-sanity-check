@@ -1,4 +1,5 @@
 import sys
+import uuid
 from pathlib import Path
 
 import click
@@ -75,100 +76,143 @@ def _load_scenarios(path: Path) -> list[Scenario]:
     return [Scenario(**s) for s in data["scenarios"]]
 
 
-def _run_single(
+def _run_scenario_iterations(
     *, scenario, documents, target_client, model, judge_model_name, judge_client,
-    threshold, max_tokens, judge_prompt, iteration, all_results, run_logger, verbose,
+    threshold, max_tokens, judge_prompt, iterations, all_results, run_logger, verbose,
 ) -> None:
-    error: str | None = None
-    target_run = RunResult(answer="")
+    # One stable prefix shared across all iterations so iteration 2+ hit KV
+    # blocks cached by iteration 1. Reference uses a separate UUID (generated
+    # inside get_reference_answer) and is run once as ground truth.
+    target_prefix = str(uuid.uuid4())
+
     reference_run = RunResult(answer="")
-    trace = EvaluationTrace(result=EvaluationResult(score=0.0, reasoning="", passed=False))
-
+    ref_error: str | None = None
     try:
-        target_run = run_scenario(scenario, documents, target_client, model, max_tokens=max_tokens)
         reference_run = get_reference_answer(scenario, documents, target_client, model, max_tokens=max_tokens)
-        trace = evaluate_answers(
-            question=scenario.question,
-            target_answer=target_run.answer,
-            reference_answer=reference_run.answer,
-            client=target_client,
-            model=judge_model_name,
-            threshold=threshold,
-            judge_client=judge_client,
-            judge_prompt=judge_prompt,
-        )
-        result = TestResult(
-            scenario_id=scenario.id, iteration=iteration, question=scenario.question,
-            target_answer=target_run.answer, reference_answer=reference_run.answer,
-            evaluation=trace.result,
-        )
     except Exception as exc:
-        error = str(exc)
-        result = TestResult(
-            scenario_id=scenario.id, iteration=iteration, question=scenario.question,
-            target_answer=target_run.answer, reference_answer=reference_run.answer,
-            evaluation=EvaluationResult(score=0.0, reasoning=str(exc), passed=False),
-            error=error,
-        )
+        ref_error = str(exc)
 
-    all_results.append(result)
-    report.print_result(result, verbose=verbose)
-    if run_logger:
-        run_logger.log(scenario=scenario, iteration=iteration,
-                       target=target_run, reference=reference_run, trace=trace, error=error)
-
-
-def _run_sequential_pairs(
-    *, scenario, documents, target_client, model, judge_model_name, judge_client,
-    threshold, max_tokens, judge_prompt, iteration, all_results, run_logger, verbose,
-) -> None:
-    pairs = scenario.pairs
-    for pair_idx in range(scenario.evaluate_from_pair, len(pairs)):
-        pair = pairs[pair_idx]
-        error: str | None = None
+    for i in range(1, iterations + 1):
+        error = ref_error
         target_run = RunResult(answer="")
-        reference_run = RunResult(answer="")
         trace = EvaluationTrace(result=EvaluationResult(score=0.0, reasoning="", passed=False))
 
-        pair_label = f"pair {pair_idx + 1}/{len(pairs)} (doc={pair.doc_id})"
-        try:
-            target_run = run_sequential_pair(
-                pairs, documents, target_client, model, pair_idx, max_tokens=max_tokens
-            )
-            reference_run = get_reference_pair_answer(
-                pairs, documents, target_client, model, pair_idx, max_tokens=max_tokens
-            )
-            trace = evaluate_answers(
-                question=pair.question,
-                target_answer=target_run.answer,
-                reference_answer=reference_run.answer,
-                client=target_client,
-                model=judge_model_name,
-                threshold=threshold,
-                judge_client=judge_client,
-                judge_prompt=judge_prompt,
-            )
+        if ref_error:
             result = TestResult(
-                scenario_id=f"{scenario.id}[{pair_label}]",
-                iteration=iteration, question=pair.question,
-                target_answer=target_run.answer, reference_answer=reference_run.answer,
-                evaluation=trace.result,
+                scenario_id=scenario.id, iteration=i, question=scenario.question,
+                target_answer="", reference_answer="",
+                evaluation=EvaluationResult(score=0.0, reasoning=ref_error, passed=False),
+                error=ref_error,
             )
-        except Exception as exc:
-            error = str(exc)
-            result = TestResult(
-                scenario_id=f"{scenario.id}[{pair_label}]",
-                iteration=iteration, question=pair.question,
-                target_answer=target_run.answer, reference_answer=reference_run.answer,
-                evaluation=EvaluationResult(score=0.0, reasoning=str(exc), passed=False),
-                error=error,
-            )
+        else:
+            try:
+                target_run = run_scenario(
+                    scenario, documents, target_client, model,
+                    unique_prefix=target_prefix, max_tokens=max_tokens,
+                )
+                trace = evaluate_answers(
+                    question=scenario.question,
+                    target_answer=target_run.answer,
+                    reference_answer=reference_run.answer,
+                    client=target_client,
+                    model=judge_model_name,
+                    threshold=threshold,
+                    judge_client=judge_client,
+                    judge_prompt=judge_prompt,
+                )
+                result = TestResult(
+                    scenario_id=scenario.id, iteration=i, question=scenario.question,
+                    target_answer=target_run.answer, reference_answer=reference_run.answer,
+                    evaluation=trace.result,
+                )
+            except Exception as exc:
+                error = str(exc)
+                result = TestResult(
+                    scenario_id=scenario.id, iteration=i, question=scenario.question,
+                    target_answer=target_run.answer, reference_answer=reference_run.answer,
+                    evaluation=EvaluationResult(score=0.0, reasoning=str(exc), passed=False),
+                    error=error,
+                )
 
         all_results.append(result)
         report.print_result(result, verbose=verbose)
         if run_logger:
-            run_logger.log(scenario=scenario, iteration=iteration,
+            run_logger.log(scenario=scenario, iteration=i,
                            target=target_run, reference=reference_run, trace=trace, error=error)
+
+
+def _run_sequential_pairs(
+    *, scenario, documents, target_client, model, judge_model_name, judge_client,
+    threshold, max_tokens, judge_prompt, iterations, all_results, run_logger, verbose,
+) -> None:
+    pairs = scenario.pairs
+    # One stable prefix shared across all pairs and iterations so that
+    # iteration 2+ of each pair can hit KV blocks from iteration 1.
+    target_prefix = str(uuid.uuid4())
+
+    for pair_idx in range(scenario.evaluate_from_pair, len(pairs)):
+        pair = pairs[pair_idx]
+        pair_label = f"pair {pair_idx + 1}/{len(pairs)} (doc={pair.doc_id})"
+
+        reference_run = RunResult(answer="")
+        ref_error: str | None = None
+        try:
+            reference_run = get_reference_pair_answer(
+                pairs, documents, target_client, model, pair_idx, max_tokens=max_tokens
+            )
+        except Exception as exc:
+            ref_error = str(exc)
+
+        for i in range(1, iterations + 1):
+            error = ref_error
+            target_run = RunResult(answer="")
+            trace = EvaluationTrace(result=EvaluationResult(score=0.0, reasoning="", passed=False))
+
+            if ref_error:
+                result = TestResult(
+                    scenario_id=f"{scenario.id}[{pair_label}]",
+                    iteration=i, question=pair.question,
+                    target_answer="", reference_answer="",
+                    evaluation=EvaluationResult(score=0.0, reasoning=ref_error, passed=False),
+                    error=ref_error,
+                )
+            else:
+                try:
+                    target_run = run_sequential_pair(
+                        pairs, documents, target_client, model, pair_idx,
+                        unique_prefix=target_prefix, max_tokens=max_tokens,
+                    )
+                    trace = evaluate_answers(
+                        question=pair.question,
+                        target_answer=target_run.answer,
+                        reference_answer=reference_run.answer,
+                        client=target_client,
+                        model=judge_model_name,
+                        threshold=threshold,
+                        judge_client=judge_client,
+                        judge_prompt=judge_prompt,
+                    )
+                    result = TestResult(
+                        scenario_id=f"{scenario.id}[{pair_label}]",
+                        iteration=i, question=pair.question,
+                        target_answer=target_run.answer, reference_answer=reference_run.answer,
+                        evaluation=trace.result,
+                    )
+                except Exception as exc:
+                    error = str(exc)
+                    result = TestResult(
+                        scenario_id=f"{scenario.id}[{pair_label}]",
+                        iteration=i, question=pair.question,
+                        target_answer=target_run.answer, reference_answer=reference_run.answer,
+                        evaluation=EvaluationResult(score=0.0, reasoning=str(exc), passed=False),
+                        error=error,
+                    )
+
+            all_results.append(result)
+            report.print_result(result, verbose=verbose)
+            if run_logger:
+                run_logger.log(scenario=scenario, iteration=i,
+                               target=target_run, reference=reference_run, trace=trace, error=error)
 
 
 @click.command(cls=_ConfigFileCommand)
@@ -252,18 +296,17 @@ def cli(
     for scenario in scenarios:
         console.print(f"[bold cyan]{scenario.id}[/] — {scenario.description}")
 
-        for i in range(1, iterations + 1):
-            common = dict(
-                scenario=scenario, documents=documents,
-                target_client=target_client, model=model,
-                judge_model_name=judge_model_name, judge_client=judge_client,
-                threshold=threshold, max_tokens=max_tokens, judge_prompt=judge_prompt,
-                iteration=i, all_results=all_results, run_logger=run_logger, verbose=verbose,
-            )
-            if scenario.mode == "sequential_pairs":
-                _run_sequential_pairs(**common)
-            else:
-                _run_single(**common)
+        common = dict(
+            scenario=scenario, documents=documents,
+            target_client=target_client, model=model,
+            judge_model_name=judge_model_name, judge_client=judge_client,
+            threshold=threshold, max_tokens=max_tokens, judge_prompt=judge_prompt,
+            iterations=iterations, all_results=all_results, run_logger=run_logger, verbose=verbose,
+        )
+        if scenario.mode == "sequential_pairs":
+            _run_sequential_pairs(**common)
+        else:
+            _run_scenario_iterations(**common)
 
         console.print()
 
