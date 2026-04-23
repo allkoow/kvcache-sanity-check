@@ -1,6 +1,62 @@
 import uuid
 from openai import OpenAI
+from rich.console import Console as _Console
 from kvcache_sanity.models import Scenario, ScenarioPair, Document, RunResult
+
+_stderr = _Console(stderr=True)
+_MAX_EMPTY_RETRIES = 3
+
+
+def _call_api(
+    client: OpenAI,
+    model: str,
+    messages: list[dict],
+    max_tokens: int,
+    label: str = "",
+) -> tuple[str, str, int]:
+    """Call the chat completions API, retrying on empty answers and warning on truncation.
+
+    Returns (answer, finish_reason, completion_tokens).
+    """
+    tag = f" [{label}]" if label else ""
+    answer = ""
+    finish_reason = ""
+    completion_tokens = 0
+
+    for attempt in range(_MAX_EMPTY_RETRIES + 1):
+        response = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=0.1,
+        )
+        choice = response.choices[0]
+        answer = choice.message.content or ""
+        finish_reason = choice.finish_reason or ""
+        completion_tokens = (response.usage.completion_tokens if response.usage else 0)
+
+        if finish_reason == "length":
+            _stderr.print(
+                f"[yellow]WARNING[/yellow]: response truncated at {max_tokens} tokens "
+                f"(completion_tokens={completion_tokens}){tag}. "
+                "Consider increasing --max-tokens."
+            )
+
+        if answer.strip():
+            return answer, finish_reason, completion_tokens
+
+        if attempt < _MAX_EMPTY_RETRIES:
+            _stderr.print(
+                f"[yellow]WARNING[/yellow]: empty answer on attempt {attempt + 1}/{_MAX_EMPTY_RETRIES}{tag}. "
+                f"finish_reason={finish_reason!r}, completion_tokens={completion_tokens}. Retrying…"
+            )
+        else:
+            _stderr.print(
+                f"[red]WARNING[/red]: empty answer after {_MAX_EMPTY_RETRIES} retries{tag}. "
+                f"finish_reason={finish_reason!r}, completion_tokens={completion_tokens}. Giving up."
+            )
+
+    return answer, finish_reason, completion_tokens
 
 # Short hardcoded acknowledgment so conversation structure is identical
 # between target and reference runs. This ensures the only variable is
@@ -25,7 +81,9 @@ def build_messages(
     system_content = (
         "You are a helpful assistant. "
         "I will provide several documents for you to read, then ask a question about them. "
-        "Each document is enclosed in <document>...</document> tags."
+        "Each document is enclosed in <document>...</document> tags. "
+        "When asked about a specific document, answer ONLY about that document. "
+        "Do not summarize or mention other documents unless explicitly asked."
     )
     if unique_prefix:
         system_content = f"[{unique_prefix}] " + system_content
@@ -53,16 +111,14 @@ def run_scenario(
     max_tokens: int = 512,
 ) -> RunResult:
     messages = build_messages(scenario, documents, unique_prefix)
-    response = client.chat.completions.create(
-        model=model,
-        messages=messages,
-        max_tokens=max_tokens,
-        temperature=0.1,
-    )
+    label = f"scenario={scenario.id}, prefix={'ref' if unique_prefix else 'target'}"
+    answer, finish_reason, completion_tokens = _call_api(client, model, messages, max_tokens, label)
     return RunResult(
-        answer=response.choices[0].message.content or "",
+        answer=answer,
         messages=messages,
         unique_prefix=unique_prefix,
+        finish_reason=finish_reason,
+        completion_tokens=completion_tokens,
     )
 
 
@@ -109,7 +165,8 @@ def build_pairs_messages(
     system_content = (
         "You are a helpful assistant. "
         "The user will paste text enclosed in <document>...</document> tags followed by a question. "
-        "Answer only about the document in that specific message."
+        "Answer ONLY about the document in that specific message. "
+        "Do not refer to, summarize, or include content from documents in any previous messages."
     )
     if unique_prefix:
         system_content = f"[{unique_prefix}] " + system_content
@@ -142,16 +199,14 @@ def run_sequential_pair(
 ) -> RunResult:
     """Run the conversation up to pair_index and return the answer for that pair."""
     messages = build_pairs_messages(pairs, documents, pair_index, unique_prefix)
-    response = client.chat.completions.create(
-        model=model,
-        messages=messages,
-        max_tokens=max_tokens,
-        temperature=0.1,
-    )
+    label = f"pair={pair_index}, prefix={'ref' if unique_prefix else 'target'}"
+    answer, finish_reason, completion_tokens = _call_api(client, model, messages, max_tokens, label)
     return RunResult(
-        answer=response.choices[0].message.content or "",
+        answer=answer,
         messages=messages,
         unique_prefix=unique_prefix,
+        finish_reason=finish_reason,
+        completion_tokens=completion_tokens,
     )
 
 

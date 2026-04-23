@@ -56,6 +56,8 @@ class RunResult:
     answer: str
     messages: list[dict] = field(default_factory=list)
     unique_prefix: Optional[str] = None
+    finish_reason: str = ""
+    completion_tokens: int = 0
 
 
 # ---------------------------------------------------------------------------

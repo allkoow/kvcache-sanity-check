@@ -9,7 +9,7 @@ scenarios:
       - doc_climate_change
       - doc_ancient_rome
       - doc_black_death
-    question: "Please summarize the first document I gave you. What is it about and what are two or three specific facts from it?"
+    question: "Summarize Document 1 only — do not mention any other documents. What is it about and what are exactly two specific facts from it?"
     target_doc_id: doc_history_of_the_internet
     key_facts:
       - Internet
@@ -25,7 +25,7 @@ scenarios:
       - doc_world_war_ii
       - doc_solar_system
       - doc_quantum_mechanics
-    question: "What was the third document I provided about? Give me a brief summary including two specific facts."
+    question: "What was Document 3 about? Give a brief summary of Document 3 only — do not include information from any other document. Include exactly two specific facts from it."
     target_doc_id: doc_world_war_ii
     key_facts:
       - World War II
@@ -56,10 +56,10 @@ scenarios:
     evaluate_from_pair: 1
     pairs:
       - doc_id: doc_ancient_rome
-        question: "Summarize this text in two or three sentences."
+        question: "Summarize the document in this message in two or three sentences. Answer only about this document."
       - doc_id: doc_history_of_the_internet
-        question: "Summarize this text in two or three sentences."
+        question: "Summarize the document in this message in two or three sentences. Answer only about this document."
       - doc_id: doc_black_death
-        question: "Summarize this text in two or three sentences."
+        question: "Summarize the document in this message in two or three sentences. Answer only about this document."
       - doc_id: doc_world_war_ii
-        question: "Summarize this text in two or three sentences."
+        question: "Summarize the document in this message in two or three sentences. Answer only about this document."
