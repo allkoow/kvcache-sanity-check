@@ -246,7 +246,7 @@ def _run_sequential_pairs(
               help="Path to a YAML file with test scenarios. Defaults to scenarios/default.yaml.")
 @click.option("--corpus-dir", default=None, type=click.Path(exists=True),
               help="Directory of .txt document files. Defaults to the bundled corpus/.")
-@click.option("--max-tokens", default=512, show_default=True, type=int,
+@click.option("--max-tokens", default=1024, show_default=True, type=int,
               help="Max tokens for model answer responses.")
 @click.option("--judge-prompt", default=DEFAULT_PROMPT, show_default=True,
               type=click.Choice(PROMPT_NAMES),

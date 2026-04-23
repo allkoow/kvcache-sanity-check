@@ -108,7 +108,7 @@ def run_scenario(
     client: OpenAI,
     model: str,
     unique_prefix: str | None = None,
-    max_tokens: int = 512,
+    max_tokens: int = 1024,
 ) -> RunResult:
     messages = build_messages(scenario, documents, unique_prefix)
     label = f"scenario={scenario.id}, prefix={'ref' if unique_prefix else 'target'}"
@@ -127,7 +127,7 @@ def get_reference_answer(
     documents: dict[str, Document],
     client: OpenAI,
     model: str,
-    max_tokens: int = 512,
+    max_tokens: int = 1024,
     prefix: str | None = None,
 ) -> RunResult:
     """Run the scenario with a cache-busting prefix to force a full KV cache miss.
@@ -197,7 +197,7 @@ def run_sequential_pair(
     model: str,
     pair_index: int,
     unique_prefix: str | None = None,
-    max_tokens: int = 512,
+    max_tokens: int = 1024,
 ) -> RunResult:
     """Run the conversation up to pair_index and return the answer for that pair."""
     messages = build_pairs_messages(pairs, documents, pair_index, unique_prefix)
@@ -218,7 +218,7 @@ def get_reference_pair_answer(
     client: OpenAI,
     model: str,
     pair_index: int,
-    max_tokens: int = 512,
+    max_tokens: int = 1024,
     prefix: str | None = None,
 ) -> RunResult:
     """Same as run_sequential_pair but with a cache-busting prefix to force a cache miss.
