@@ -14,6 +14,7 @@ def _call_api(
     messages: list[dict],
     max_tokens: int,
     label: str = "",
+    temperature: float = 0.1,
 ) -> tuple[str, str, int, str, str]:
     """Call the chat completions API, retrying on empty answers and warning on truncation.
 
@@ -33,7 +34,7 @@ def _call_api(
             model=model,
             messages=messages,
             max_tokens=max_tokens,
-            temperature=0.1,
+            temperature=temperature,
         )
         request_time = datetime.now(timezone.utc).isoformat()
         choice = response.choices[0]
@@ -118,10 +119,11 @@ def run_scenario(
     model: str,
     unique_prefix: str | None = None,
     max_tokens: int = 1024,
+    temperature: float = 0.1,
 ) -> RunResult:
     messages = build_messages(scenario, documents, unique_prefix)
     label = f"scenario={scenario.id}, prefix={'ref' if unique_prefix else 'target'}"
-    answer, finish_reason, completion_tokens, request_id, request_time = _call_api(client, model, messages, max_tokens, label)
+    answer, finish_reason, completion_tokens, request_id, request_time = _call_api(client, model, messages, max_tokens, label, temperature=temperature)
     return RunResult(
         answer=answer,
         messages=messages,
@@ -140,6 +142,7 @@ def get_reference_answer(
     model: str,
     max_tokens: int = 1024,
     prefix: str | None = None,
+    temperature: float = 0.1,
 ) -> RunResult:
     """Run the scenario with a cache-busting prefix to force a full KV cache miss.
 
@@ -149,7 +152,7 @@ def get_reference_answer(
     """
     if prefix is None:
         prefix = str(uuid.uuid4())
-    return run_scenario(scenario, documents, client, model, prefix, max_tokens)
+    return run_scenario(scenario, documents, client, model, prefix, max_tokens, temperature=temperature)
 
 
 # ---------------------------------------------------------------------------
@@ -209,11 +212,12 @@ def run_sequential_pair(
     pair_index: int,
     unique_prefix: str | None = None,
     max_tokens: int = 1024,
+    temperature: float = 0.1,
 ) -> RunResult:
     """Run the conversation up to pair_index and return the answer for that pair."""
     messages = build_pairs_messages(pairs, documents, pair_index, unique_prefix)
     label = f"pair={pair_index}, prefix={'ref' if unique_prefix else 'target'}"
-    answer, finish_reason, completion_tokens, request_id, request_time = _call_api(client, model, messages, max_tokens, label)
+    answer, finish_reason, completion_tokens, request_id, request_time = _call_api(client, model, messages, max_tokens, label, temperature=temperature)
     return RunResult(
         answer=answer,
         messages=messages,
@@ -233,6 +237,7 @@ def get_reference_pair_answer(
     pair_index: int,
     max_tokens: int = 1024,
     prefix: str | None = None,
+    temperature: float = 0.1,
 ) -> RunResult:
     """Same as run_sequential_pair but with a cache-busting prefix to force a cache miss.
 
@@ -241,4 +246,4 @@ def get_reference_pair_answer(
     """
     if prefix is None:
         prefix = str(uuid.uuid4())
-    return run_sequential_pair(pairs, documents, client, model, pair_index, prefix, max_tokens)
+    return run_sequential_pair(pairs, documents, client, model, pair_index, prefix, max_tokens, temperature=temperature)
