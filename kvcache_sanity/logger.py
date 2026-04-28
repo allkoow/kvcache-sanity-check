@@ -45,6 +45,7 @@ class RunLogger:
         reference: RunResult,
         trace: EvaluationTrace,
         error: str | None = None,
+        temperature: float | None = None,
     ) -> None:
         run_log = RunLog(
             timestamp=datetime.now(timezone.utc).isoformat(),
@@ -58,6 +59,7 @@ class RunLogger:
             target_request_id=target.request_id,
             reference_request_id=reference.request_id,
             target_request_time=target.request_time,
+            temperature=temperature,
             judge_messages=_truncate_messages(trace.judge_messages),
             judge_raw_response=trace.judge_raw_response,
             evaluation=trace.result,
