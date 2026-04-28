@@ -79,6 +79,7 @@ def _load_scenarios(path: Path) -> list[Scenario]:
 def _run_scenario_iterations(
     *, scenario, documents, target_client, model, judge_model_name, judge_client,
     threshold, max_tokens, judge_prompt, iterations, all_results, run_logger, verbose,
+    temperature, judge_temperature,
 ) -> None:
     # Reference runs first with a shared UUID, warming the KV cache.
     # All target iterations reuse the same UUID so they hit blocks cached
@@ -90,7 +91,7 @@ def _run_scenario_iterations(
     try:
         reference_run = get_reference_answer(
             scenario, documents, target_client, model,
-            max_tokens=max_tokens, prefix=shared_prefix,
+            max_tokens=max_tokens, prefix=shared_prefix, temperature=temperature,
         )
     except Exception as exc:
         ref_error = str(exc)
@@ -111,7 +112,7 @@ def _run_scenario_iterations(
             try:
                 target_run = run_scenario(
                     scenario, documents, target_client, model,
-                    unique_prefix=shared_prefix, max_tokens=max_tokens,
+                    unique_prefix=shared_prefix, max_tokens=max_tokens, temperature=temperature,
                 )
                 trace = evaluate_answers(
                     question=scenario.question,
@@ -122,6 +123,7 @@ def _run_scenario_iterations(
                     threshold=threshold,
                     judge_client=judge_client,
                     judge_prompt=judge_prompt,
+                    judge_temperature=judge_temperature,
                 )
                 result = TestResult(
                     scenario_id=scenario.id, iteration=i, question=scenario.question,
@@ -142,12 +144,14 @@ def _run_scenario_iterations(
         report.print_result(result, verbose=verbose)
         if run_logger:
             run_logger.log(scenario=scenario, iteration=i,
-                           target=target_run, reference=reference_run, trace=trace, error=error)
+                           target=target_run, reference=reference_run, trace=trace, error=error,
+                           temperature=temperature)
 
 
 def _run_sequential_pairs(
     *, scenario, documents, target_client, model, judge_model_name, judge_client,
     threshold, max_tokens, judge_prompt, iterations, all_results, run_logger, verbose,
+    temperature, judge_temperature,
 ) -> None:
     pairs = scenario.pairs
     # Reference runs first with a shared UUID per scenario, warming the KV cache.
@@ -163,7 +167,7 @@ def _run_sequential_pairs(
         try:
             reference_run = get_reference_pair_answer(
                 pairs, documents, target_client, model, pair_idx,
-                max_tokens=max_tokens, prefix=shared_prefix,
+                max_tokens=max_tokens, prefix=shared_prefix, temperature=temperature,
             )
         except Exception as exc:
             ref_error = str(exc)
@@ -185,7 +189,7 @@ def _run_sequential_pairs(
                 try:
                     target_run = run_sequential_pair(
                         pairs, documents, target_client, model, pair_idx,
-                        unique_prefix=shared_prefix, max_tokens=max_tokens,
+                        unique_prefix=shared_prefix, max_tokens=max_tokens, temperature=temperature,
                     )
                     trace = evaluate_answers(
                         question=pair.question,
@@ -196,6 +200,7 @@ def _run_sequential_pairs(
                         threshold=threshold,
                         judge_client=judge_client,
                         judge_prompt=judge_prompt,
+                        judge_temperature=judge_temperature,
                     )
                     result = TestResult(
                         scenario_id=f"{scenario.id}[{pair_label}]",
@@ -218,7 +223,8 @@ def _run_sequential_pairs(
             report.print_result(result, verbose=verbose)
             if run_logger:
                 run_logger.log(scenario=scenario, iteration=i,
-                               target=target_run, reference=reference_run, trace=trace, error=error)
+                               target=target_run, reference=reference_run, trace=trace, error=error,
+                               temperature=temperature)
 
 
 @click.command(cls=_ConfigFileCommand)
@@ -239,6 +245,11 @@ def _run_sequential_pairs(
               help="Model name for the judge. Defaults to --model.")
 @click.option("--judge-api-key", default="EMPTY", show_default=True,
               help="API key for the judge endpoint.")
+@click.option("--temperature", default=0.1, show_default=True, type=float,
+              help="Sampling temperature for scenario runs (0.0 = deterministic). "
+                   "Per-scenario YAML 'temperature' field overrides this.")
+@click.option("--judge-temperature", default=0.0, show_default=True, type=float,
+              help="Sampling temperature for the LLM-as-judge evaluation call.")
 @click.option("--iterations", default=1, show_default=True, type=int,
               help="Number of times to run each scenario. "
                    "Multiple iterations help catch flaky caching failures.")
@@ -261,6 +272,7 @@ def _run_sequential_pairs(
 def cli(
     target_url, model, api_key,
     judge_url, judge_model, judge_api_key,
+    temperature, judge_temperature,
     iterations, threshold, scenarios_file, corpus_dir,
     max_tokens, judge_prompt, log_file, verbose,
 ):
@@ -293,6 +305,7 @@ def cli(
     console.print("[bold]KV Cache Sanity Check[/]")
     console.print(f"Target : {target_base}  model={model}")
     console.print(f"Scenarios: {len(scenarios)}  iterations: {iterations}  threshold: {threshold}")
+    console.print(f"Temperature: {temperature}  Judge temperature: {judge_temperature}")
     if run_logger:
         console.print(f"Logging to: {log_file}")
     console.print()
@@ -302,12 +315,15 @@ def cli(
     for scenario in scenarios:
         console.print(f"[bold cyan]{scenario.id}[/] — {scenario.description}")
 
+        effective_temp = scenario.temperature if scenario.temperature is not None else temperature
+
         common = dict(
             scenario=scenario, documents=documents,
             target_client=target_client, model=model,
             judge_model_name=judge_model_name, judge_client=judge_client,
             threshold=threshold, max_tokens=max_tokens, judge_prompt=judge_prompt,
             iterations=iterations, all_results=all_results, run_logger=run_logger, verbose=verbose,
+            temperature=effective_temp, judge_temperature=judge_temperature,
         )
         if scenario.mode == "sequential_pairs":
             _run_sequential_pairs(**common)
