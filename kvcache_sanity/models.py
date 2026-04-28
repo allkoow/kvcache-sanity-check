@@ -28,6 +28,7 @@ class Scenario(BaseModel):
     mode: str = "multi_turn_recall"
     pairs: list[ScenarioPair] = []
     evaluate_from_pair: int = 1    # skip this many leading pairs before evaluating
+    temperature: float | None = None
 
 
 class EvaluationResult(BaseModel):
@@ -96,6 +97,7 @@ class RunLog(BaseModel):
     target_request_id: str = ""
     reference_request_id: str = ""
     target_request_time: str = ""
+    temperature: float | None = None
     judge_messages: list[MessageLog]
     judge_raw_response: str
     evaluation: EvaluationResult
