@@ -104,6 +104,7 @@ def evaluate_answers(
     threshold: float = 0.7,
     judge_client: OpenAI | None = None,
     judge_prompt: str = DEFAULT_PROMPT,
+    judge_temperature: float = 0.0,
 ) -> EvaluationTrace:
     """Compare target_answer to reference_answer using LLM-as-judge.
 
@@ -145,7 +146,7 @@ def evaluate_answers(
         model=model,
         messages=messages,
         max_tokens=1024,
-        temperature=0.0,
+        temperature=judge_temperature,
     )
 
     raw = (response.choices[0].message.content or "").strip()
