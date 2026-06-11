@@ -1,3 +1,6 @@
+import csv
+from pathlib import Path
+
 from rich.console import Console
 from rich.panel import Panel
 from rich import box
@@ -44,3 +47,40 @@ def print_summary(results: list[TestResult]) -> None:
         title="[bold]Summary[/]",
         box=box.ROUNDED,
     ))
+
+
+def write_accuracy_csv(results: list[TestResult], path: Path) -> None:
+    """Write results as a CloudAI-compatible accuracy CSV.
+
+    Columns are ``Task,Correct,Total,Accuracy`` with one row per scenario (Correct =
+    passed iterations, Accuracy = Correct/Total as a 0.0-1.0 fraction) plus a final
+    OVERALL row aggregating every iteration. CloudAI's AIDynamo report strategy reads
+    the Accuracy of the OVERALL row, so the file is meaningful even when the process
+    exit code is decoupled from pass/fail (e.g. wrapped with ``|| true``).
+    """
+    # scenario_id -> [correct, total], insertion-ordered so the CSV mirrors run order.
+    per_scenario: dict[str, list[int]] = {}
+
+    for result in results:
+        bucket = per_scenario.setdefault(result.scenario_id, [0, 0])
+        bucket[1] += 1
+        if result.evaluation.passed:
+            bucket[0] += 1
+
+    total_correct = sum(correct for correct, _ in per_scenario.values())
+    total_count = sum(count for _, count in per_scenario.values())
+
+    path = Path(path)
+    if path.parent != Path(""):
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+    with path.open("w", newline="", encoding="utf-8") as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow(["Task", "Correct", "Total", "Accuracy"])
+
+        for scenario_id, (correct, count) in per_scenario.items():
+            accuracy = correct / count if count else 0.0
+            writer.writerow([scenario_id, correct, count, f"{accuracy:.4f}"])
+
+        overall = total_correct / total_count if total_count else 0.0
+        writer.writerow(["OVERALL", total_correct, total_count, f"{overall:.4f}"])

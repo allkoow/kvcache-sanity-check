@@ -267,6 +267,10 @@ def _run_sequential_pairs(
                    "'topic' only catches wrong-document answers.")
 @click.option("--log-file", default=None, type=click.Path(), metavar="PATH",
               help="Append full run traces (JSON Lines) to this file for later review with kvcache-logs.")
+@click.option("--accuracy-csv", default=None, type=click.Path(), metavar="PATH",
+              help="Write a CloudAI-compatible accuracy CSV (Task,Correct,Total,Accuracy with an "
+                   "OVERALL row) to PATH. Per-scenario pass/fail is aggregated into a 0.0-1.0 fraction; "
+                   "the file is written regardless of the exit code.")
 @click.option("--verbose", "-v", is_flag=True,
               help="Print target and reference answers for every test, not just failures.")
 def cli(
@@ -274,7 +278,7 @@ def cli(
     judge_url, judge_model, judge_api_key,
     temperature, judge_temperature,
     iterations, threshold, scenarios_file, corpus_dir,
-    max_tokens, judge_prompt, log_file, verbose,
+    max_tokens, judge_prompt, log_file, accuracy_csv, verbose,
 ):
     """Sanity-check LLM output correctness when using offloaded KV cache.
 
@@ -333,6 +337,10 @@ def cli(
         console.print()
 
     report.print_summary(all_results)
+
+    if accuracy_csv:
+        report.write_accuracy_csv(all_results, Path(accuracy_csv))
+        console.print(f"Accuracy CSV written to: {accuracy_csv}")
 
     if not all(r.evaluation.passed for r in all_results):
         sys.exit(1)
