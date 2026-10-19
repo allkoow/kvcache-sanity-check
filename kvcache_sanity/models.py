@@ -74,6 +74,7 @@ class EvaluationTrace:
     judge_messages: list[dict] = field(default_factory=list)
     judge_raw_response: str = ""
     eval_prefix: str = ""
+    judge_attempts: int = 1
 
 
 # ---------------------------------------------------------------------------
@@ -100,5 +101,6 @@ class RunLog(BaseModel):
     temperature: float | None = None
     judge_messages: list[MessageLog]
     judge_raw_response: str
+    judge_attempts: int = 1
     evaluation: EvaluationResult
     error: Optional[str] = None

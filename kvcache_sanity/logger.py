@@ -62,6 +62,7 @@ class RunLogger:
             temperature=temperature,
             judge_messages=_truncate_messages(trace.judge_messages),
             judge_raw_response=trace.judge_raw_response,
+            judge_attempts=trace.judge_attempts,
             evaluation=trace.result,
             error=error,
         )

@@ -8,7 +8,13 @@ from openai import OpenAI
 from rich.console import Console
 
 from kvcache_sanity.corpus import load_documents
-from kvcache_sanity.evaluator import evaluate_answers, DEFAULT_PROMPT, PROMPT_NAMES
+from kvcache_sanity.evaluator import (
+    DEFAULT_JUDGE_MAX_TOKENS,
+    DEFAULT_JUDGE_RETRIES,
+    DEFAULT_PROMPT,
+    PROMPT_NAMES,
+    evaluate_answers,
+)
 from kvcache_sanity.logger import RunLogger
 from kvcache_sanity.models import EvaluationResult, EvaluationTrace, RunResult, Scenario, TestResult
 from kvcache_sanity.runner import (
@@ -79,7 +85,7 @@ def _load_scenarios(path: Path) -> list[Scenario]:
 def _run_scenario_iterations(
     *, scenario, documents, target_client, model, judge_model_name, judge_client,
     threshold, max_tokens, judge_prompt, iterations, all_results, run_logger, verbose,
-    temperature, judge_temperature,
+    temperature, judge_temperature, judge_max_tokens, judge_retries,
 ) -> None:
     # Reference runs first with a shared UUID, warming the KV cache.
     # All target iterations reuse the same UUID so they hit blocks cached
@@ -124,6 +130,8 @@ def _run_scenario_iterations(
                     judge_client=judge_client,
                     judge_prompt=judge_prompt,
                     judge_temperature=judge_temperature,
+                    judge_max_tokens=judge_max_tokens,
+                    judge_retries=judge_retries,
                 )
                 result = TestResult(
                     scenario_id=scenario.id, iteration=i, question=scenario.question,
@@ -151,7 +159,7 @@ def _run_scenario_iterations(
 def _run_sequential_pairs(
     *, scenario, documents, target_client, model, judge_model_name, judge_client,
     threshold, max_tokens, judge_prompt, iterations, all_results, run_logger, verbose,
-    temperature, judge_temperature,
+    temperature, judge_temperature, judge_max_tokens, judge_retries,
 ) -> None:
     pairs = scenario.pairs
     # Reference runs first with a shared UUID per scenario, warming the KV cache.
@@ -201,6 +209,8 @@ def _run_sequential_pairs(
                         judge_client=judge_client,
                         judge_prompt=judge_prompt,
                         judge_temperature=judge_temperature,
+                        judge_max_tokens=judge_max_tokens,
+                        judge_retries=judge_retries,
                     )
                     result = TestResult(
                         scenario_id=f"{scenario.id}[{pair_label}]",
@@ -250,6 +260,10 @@ def _run_sequential_pairs(
                    "Per-scenario YAML 'temperature' field overrides this.")
 @click.option("--judge-temperature", default=0.0, show_default=True, type=float,
               help="Sampling temperature for the LLM-as-judge evaluation call.")
+@click.option("--judge-max-tokens", default=DEFAULT_JUDGE_MAX_TOKENS, show_default=True, type=int,
+              help="Max tokens for the judge response. Reasoning models spend part of it before the JSON verdict.")
+@click.option("--judge-retries", default=DEFAULT_JUDGE_RETRIES, show_default=True, type=click.IntRange(min=0),
+              help="Extra judge calls when a response carries no score (empty, truncated or not JSON).")
 @click.option("--iterations", default=1, show_default=True, type=int,
               help="Number of times to run each scenario. "
                    "Multiple iterations help catch flaky caching failures.")
@@ -276,7 +290,7 @@ def _run_sequential_pairs(
 def cli(
     target_url, model, api_key,
     judge_url, judge_model, judge_api_key,
-    temperature, judge_temperature,
+    temperature, judge_temperature, judge_max_tokens, judge_retries,
     iterations, threshold, scenarios_file, corpus_dir,
     max_tokens, judge_prompt, log_file, accuracy_csv, verbose,
 ):
@@ -310,6 +324,7 @@ def cli(
     console.print(f"Target : {target_base}  model={model}")
     console.print(f"Scenarios: {len(scenarios)}  iterations: {iterations}  threshold: {threshold}")
     console.print(f"Temperature: {temperature}  Judge temperature: {judge_temperature}")
+    console.print(f"Judge max tokens: {judge_max_tokens}  Judge retries: {judge_retries}")
     if run_logger:
         console.print(f"Logging to: {log_file}")
     console.print()
@@ -328,6 +343,7 @@ def cli(
             threshold=threshold, max_tokens=max_tokens, judge_prompt=judge_prompt,
             iterations=iterations, all_results=all_results, run_logger=run_logger, verbose=verbose,
             temperature=effective_temp, judge_temperature=judge_temperature,
+            judge_max_tokens=judge_max_tokens, judge_retries=judge_retries,
         )
         if scenario.mode == "sequential_pairs":
             _run_sequential_pairs(**common)
