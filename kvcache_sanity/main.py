@@ -89,6 +89,14 @@ def _evaluation_status(evaluation: EvaluationResult) -> ResultStatus:
     return ResultStatus.PASS if evaluation.passed else ResultStatus.FAIL
 
 
+def _incomplete_target_evaluation(target_run: RunResult) -> EvaluationResult:
+    reasoning = (
+        f"[target incomplete, judge skipped] finish_reason={target_run.finish_reason!r}, "
+        f"completion_tokens={target_run.completion_tokens}, answer_chars={len(target_run.answer.strip())}"
+    )
+    return EvaluationResult(score=0.0, reasoning=reasoning, passed=False)
+
+
 def _incomplete_reference_evaluation(attempts: list[RunResult]) -> EvaluationResult:
     last = attempts[-1]
     reasoning = (
@@ -151,25 +159,31 @@ def _run_scenario_iterations(
                 target_run = run_scenario(
                     scenario, documents, target_client, model,
                     unique_prefix=reference_run.unique_prefix, max_tokens=max_tokens, temperature=temperature,
+                    empty_retries=0,
                 )
-                trace = evaluate_answers(
-                    question=scenario.question,
-                    target_answer=target_run.answer,
-                    reference_answer=reference_run.answer,
-                    client=target_client,
-                    model=judge_model_name,
-                    threshold=threshold,
-                    judge_client=judge_client,
-                    judge_prompt=judge_prompt,
-                    judge_temperature=judge_temperature,
-                    judge_max_tokens=judge_max_tokens,
-                    judge_retries=judge_retries,
-                )
+                if is_complete(target_run):
+                    trace = evaluate_answers(
+                        question=scenario.question,
+                        target_answer=target_run.answer,
+                        reference_answer=reference_run.answer,
+                        client=target_client,
+                        model=judge_model_name,
+                        threshold=threshold,
+                        judge_client=judge_client,
+                        judge_prompt=judge_prompt,
+                        judge_temperature=judge_temperature,
+                        judge_max_tokens=judge_max_tokens,
+                        judge_retries=judge_retries,
+                    )
+                    status = _evaluation_status(trace.result)
+                else:
+                    trace = EvaluationTrace(result=_incomplete_target_evaluation(target_run))
+                    status = ResultStatus.TARGET_INCOMPLETE
                 result = TestResult(
                     scenario_id=scenario.id, iteration=i, question=scenario.question,
                     target_answer=target_run.answer, reference_answer=reference_run.answer,
                     evaluation=trace.result,
-                    status=_evaluation_status(trace.result),
+                    status=status,
                     target_request_id=target_run.request_id,
                 )
             except Exception as exc:
@@ -249,26 +263,32 @@ def _run_sequential_pairs(
                     target_run = run_sequential_pair(
                         pairs, documents, target_client, model, pair_idx,
                         unique_prefix=reference_run.unique_prefix, max_tokens=max_tokens, temperature=temperature,
+                        empty_retries=0,
                     )
-                    trace = evaluate_answers(
-                        question=pair.question,
-                        target_answer=target_run.answer,
-                        reference_answer=reference_run.answer,
-                        client=target_client,
-                        model=judge_model_name,
-                        threshold=threshold,
-                        judge_client=judge_client,
-                        judge_prompt=judge_prompt,
-                        judge_temperature=judge_temperature,
-                        judge_max_tokens=judge_max_tokens,
-                        judge_retries=judge_retries,
-                    )
+                    if is_complete(target_run):
+                        trace = evaluate_answers(
+                            question=pair.question,
+                            target_answer=target_run.answer,
+                            reference_answer=reference_run.answer,
+                            client=target_client,
+                            model=judge_model_name,
+                            threshold=threshold,
+                            judge_client=judge_client,
+                            judge_prompt=judge_prompt,
+                            judge_temperature=judge_temperature,
+                            judge_max_tokens=judge_max_tokens,
+                            judge_retries=judge_retries,
+                        )
+                        status = _evaluation_status(trace.result)
+                    else:
+                        trace = EvaluationTrace(result=_incomplete_target_evaluation(target_run))
+                        status = ResultStatus.TARGET_INCOMPLETE
                     result = TestResult(
                         scenario_id=f"{scenario.id}[{pair_label}]",
                         iteration=i, question=pair.question,
                         target_answer=target_run.answer, reference_answer=reference_run.answer,
                         evaluation=trace.result,
-                        status=_evaluation_status(trace.result),
+                        status=status,
                         target_request_id=target_run.request_id,
                     )
                 except Exception as exc:
@@ -339,9 +359,10 @@ def _run_sequential_pairs(
 @click.option("--log-file", default=None, type=click.Path(), metavar="PATH",
               help="Append full run traces (JSON Lines) to this file for later review with kvcache-logs.")
 @click.option("--accuracy-csv", default=None, type=click.Path(), metavar="PATH",
-              help="Write a CloudAI-compatible accuracy CSV (Task,Correct,Total,Accuracy with an "
-                   "OVERALL row) to PATH. Per-scenario pass/fail is aggregated into a 0.0-1.0 fraction; "
-                   "the file is written regardless of the exit code.")
+              help="Write a CloudAI-compatible accuracy CSV (Task,Correct,Total,Accuracy,Invalid,"
+                   "ReferenceIncomplete,TargetIncomplete with an OVERALL row) to PATH. Per-scenario pass/fail is "
+                   "aggregated into a 0.0-1.0 fraction; Invalid and TargetIncomplete iterations count in Total. "
+                   "The file is written regardless of the exit code.")
 @click.option("--verbose", "-v", is_flag=True,
               help="Print target and reference answers for every test, not just failures.")
 def cli(

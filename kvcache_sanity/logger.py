@@ -76,6 +76,8 @@ class RunLogger:
             target_request_id=target.request_id,
             reference_request_id=reference.request_id,
             target_request_time=target.request_time,
+            target_finish_reason=target.finish_reason,
+            target_completion_tokens=target.completion_tokens,
             temperature=temperature,
             judge_messages=_truncate_messages(trace.judge_messages),
             judge_raw_response=trace.judge_raw_response,

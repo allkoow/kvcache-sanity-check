@@ -10,6 +10,8 @@ class ResultStatus(str, Enum):
     ERROR = "ERROR"
     # No complete reference after all attempts: the case says nothing about the cache path.
     REFERENCE_INCOMPLETE = "REFERENCE_INCOMPLETE"
+    # Truncated or empty target next to a complete reference: counted as an incorrect answer.
+    TARGET_INCOMPLETE = "TARGET_INCOMPLETE"
 
 
 class Document(BaseModel):
@@ -118,6 +120,8 @@ class RunLog(BaseModel):
     target_request_id: str = ""
     reference_request_id: str = ""
     target_request_time: str = ""
+    target_finish_reason: str = ""
+    target_completion_tokens: int = 0
     temperature: float | None = None
     judge_messages: list[MessageLog]
     judge_raw_response: str
