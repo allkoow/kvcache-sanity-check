@@ -31,7 +31,7 @@ DEFAULT_ARTICLES = [
     "Quantum mechanics",
 ]
 
-CORPUS_DIR = Path(__file__).parent.parent / "corpus"
+CORPUS_DIR = Path(__file__).parent.parent / "kvcache_sanity" / "data" / "corpus"
 API_URL = "https://en.wikipedia.org/w/api.php"
 
 

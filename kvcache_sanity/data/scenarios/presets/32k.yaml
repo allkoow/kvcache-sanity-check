@@ -1,0 +1,38 @@
+# Context-length preset: ~32K window.
+#
+#   docs (~26709 tok) + answer (--max-tokens 1024, the CLI default) + overhead (~300 tok)
+#     ≈ 28033 / 32768  →  ~14% headroom
+#
+# Run with:
+#   kvcache-check --target-url ... --model ... \
+#     --scenarios-file scenarios/presets/32k.yaml
+#   (default --max-tokens 1024 is fine at this size)
+
+scenarios:
+  - id: ctx32k_early_doc_recall
+    description: "~32K context budget; recall the first document loaded (earliest KV blocks, highest eviction risk)"
+    document_ids:
+      - doc_human_genome
+      - doc_black_death
+      - doc_l1_french_revolution
+      - doc_m1_apollo
+      - doc_s1_python
+    question: "Summarize Document 1 only — do not mention any other documents. What is it about and what are exactly two specific facts from it?"
+    target_doc_id: doc_human_genome
+    key_facts:
+      - human genome
+      - chromosomes
+      - DNA
+
+  - id: ctx32k_middle_doc_recall
+    description: "~32K context budget; recall a document from the middle of the context window (moderate eviction risk)"
+    document_ids:
+      - doc_human_genome
+      - doc_black_death
+      - doc_l1_french_revolution
+      - doc_m1_apollo
+      - doc_s1_python
+    question: "What was Document 3 about? Give a brief summary of Document 3 only — do not include information from any other document. Include exactly two specific facts from it."
+    target_doc_id: doc_l1_french_revolution
+    key_facts:
+      - French Revolution
