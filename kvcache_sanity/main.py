@@ -10,18 +10,17 @@ from rich.console import Console
 from kvcache_sanity.corpus import load_documents
 from kvcache_sanity.evaluator import evaluate_answers, DEFAULT_PROMPT, PROMPT_NAMES
 from kvcache_sanity.logger import RunLogger
-from kvcache_sanity.models import EvaluationResult, EvaluationTrace, RunResult, Scenario, TestResult
+from kvcache_sanity.models import EvaluationResult, EvaluationTrace, RunResult, TestResult
 from kvcache_sanity.runner import (
     get_reference_answer,
     get_reference_pair_answer,
     run_scenario,
     run_sequential_pair,
 )
+from kvcache_sanity.scenarios import find_named_scenarios, load_scenarios
 from kvcache_sanity import report
 
 console = Console()
-
-DEFAULT_SCENARIOS_FILE = Path(__file__).parent.parent / "scenarios" / "default.yaml"
 
 _CONFIG_SEARCH_PATHS = [
     Path("kvcache-check.yaml"),
@@ -68,12 +67,6 @@ class _ConfigFileCommand(click.Command):
         if config:
             kwargs.setdefault("default_map", {}).update(config)
         return super().make_context(info_name, args, **kwargs)
-
-
-def _load_scenarios(path: Path) -> list[Scenario]:
-    with open(path) as f:
-        data = yaml.safe_load(f)
-    return [Scenario(**s) for s in data["scenarios"]]
 
 
 def _run_scenario_iterations(
@@ -255,10 +248,19 @@ def _run_sequential_pairs(
                    "Multiple iterations help catch flaky caching failures.")
 @click.option("--threshold", default=0.7, show_default=True, type=float,
               help="Minimum similarity score (0.0–1.0) to count as PASS.")
+@click.option("--scenarios", "scenarios_name", default=None, metavar="NAME",
+              help="Named scenario set, e.g. '32k' — resolved against the user scenarios dir "
+                   "then the bundled presets/default.yaml (user wins on a name collision). "
+                   "Mutually exclusive with --scenarios-file.")
 @click.option("--scenarios-file", default=None, type=click.Path(exists=True),
-              help="Path to a YAML file with test scenarios. Defaults to scenarios/default.yaml.")
+              help="Path to a YAML file with test scenarios, used exclusively. Without this or "
+                   "--scenarios, loads the bundled default.yaml merged with any *.yaml files in "
+                   "the user scenarios dir (see paths.user_data_dir(); user scenarios win on a "
+                   "matching id).")
 @click.option("--corpus-dir", default=None, type=click.Path(exists=True),
-              help="Directory of .txt document files. Defaults to the bundled corpus/.")
+              help="Directory of .txt document files, used exclusively. Without this, loads the "
+                   "bundled corpus merged with the user corpus dir (see paths.user_data_dir(); "
+                   "user documents win on a matching doc_id).")
 @click.option("--max-tokens", default=1024, show_default=True, type=int,
               help="Max tokens for model answer responses.")
 @click.option("--judge-prompt", default=DEFAULT_PROMPT, show_default=True,
@@ -277,7 +279,7 @@ def cli(
     target_url, model, api_key,
     judge_url, judge_model, judge_api_key,
     temperature, judge_temperature,
-    iterations, threshold, scenarios_file, corpus_dir,
+    iterations, threshold, scenarios_name, scenarios_file, corpus_dir,
     max_tokens, judge_prompt, log_file, accuracy_csv, verbose,
 ):
     """Sanity-check LLM output correctness when using offloaded KV cache.
@@ -288,11 +290,18 @@ def cli(
     against a reference obtained by forcing a full recompute via a unique cache-busting
     prefix injected into the system message.
     """
+    if scenarios_name and scenarios_file:
+        raise click.UsageError("--scenarios and --scenarios-file are mutually exclusive.")
+
     corpus_path = Path(corpus_dir) if corpus_dir else None
     documents = load_documents(corpus_path)
 
-    scenarios_path = Path(scenarios_file) if scenarios_file else DEFAULT_SCENARIOS_FILE
-    scenarios = _load_scenarios(scenarios_path)
+    if scenarios_name:
+        try:
+            scenarios_file = find_named_scenarios(scenarios_name)
+        except FileNotFoundError as exc:
+            raise click.BadParameter(str(exc), param_hint="--scenarios")
+    scenarios = load_scenarios(scenarios_file)
 
     # Normalise base URLs — strip trailing slash
     target_base = target_url.rstrip("/")

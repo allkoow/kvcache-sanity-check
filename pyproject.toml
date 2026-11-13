@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kvcache-sanity-check"
-version = "0.1.0"
+version = "0.1.3"
 description = "Sanity check tool for LLM output correctness when using offloaded KV cache"
 requires-python = ">=3.10"
 dependencies = [

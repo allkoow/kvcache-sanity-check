@@ -14,25 +14,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import click
-import yaml
 from openai import OpenAI
 from rich.console import Console
 from rich.rule import Rule
 
 from kvcache_sanity.corpus import load_documents
 from kvcache_sanity.logger import load_run_logs
-from kvcache_sanity.models import Scenario
 from kvcache_sanity.runner import _call_api, build_messages, build_pairs_messages
+from kvcache_sanity.scenarios import find_named_scenarios, load_scenarios
 
 console = Console()
-
-_DEFAULT_SCENARIOS_FILE = Path(__file__).parent.parent / "scenarios" / "default.yaml"
-
-
-def _load_scenarios(path: Path) -> list[Scenario]:
-    with open(path) as f:
-        data = yaml.safe_load(f)
-    return [Scenario(**s) for s in data["scenarios"]]
 
 
 def _parse_scenario_id(scenario_id: str) -> tuple[str, int | None]:
@@ -62,14 +53,21 @@ def _parse_scenario_id(scenario_id: str) -> tuple[str, int | None]:
               help="Max tokens for each replayed response.")
 @click.option("--temperature", default=0.1, show_default=True, type=float,
               help="Sampling temperature used if the log entry does not record one.")
+@click.option("--scenarios", "scenarios_name", default=None, metavar="NAME",
+              help="Named scenario set, e.g. '32k' — resolved against the user scenarios dir "
+                   "then the bundled presets/default.yaml (user wins on a name collision). "
+                   "Mutually exclusive with --scenarios-file.")
 @click.option("--scenarios-file", default=None, type=click.Path(exists=True),
-              help="Scenarios YAML file. Defaults to scenarios/default.yaml.")
+              help="Scenarios YAML file, used exclusively. Without this or --scenarios, loads "
+                   "the bundled default.yaml merged with the user scenarios dir "
+                   "(see paths.user_data_dir()).")
 @click.option("--corpus-dir", default=None, type=click.Path(exists=True),
-              help="Corpus directory. Defaults to the bundled corpus/.")
+              help="Corpus directory, used exclusively. Without this, loads the bundled corpus "
+                   "merged with the user corpus dir (see paths.user_data_dir()).")
 def replay(
     log_file, request_id, count,
     target_url, model, api_key, max_tokens, temperature,
-    scenarios_file, corpus_dir,
+    scenarios_name, scenarios_file, corpus_dir,
 ) -> None:
     """Replay a logged request N times to reproduce or characterise a failure.
 
@@ -99,14 +97,21 @@ def replay(
     console.print(f"Temperature: {effective_temperature}")
     console.print()
 
+    if scenarios_name and scenarios_file:
+        raise click.UsageError("--scenarios and --scenarios-file are mutually exclusive.")
+
     # --- reconstruct messages ---
     base_id, pair_idx = _parse_scenario_id(entry.scenario_id)
 
-    scenarios_path = Path(scenarios_file) if scenarios_file else _DEFAULT_SCENARIOS_FILE
-    scenarios = _load_scenarios(scenarios_path)
+    if scenarios_name:
+        try:
+            scenarios_file = find_named_scenarios(scenarios_name)
+        except FileNotFoundError as exc:
+            raise click.BadParameter(str(exc), param_hint="--scenarios")
+    scenarios = load_scenarios(scenarios_file)
     scenario = next((s for s in scenarios if s.id == base_id), None)
     if scenario is None:
-        console.print(f"[red]Scenario {base_id!r} not found in {scenarios_path}[/]")
+        console.print(f"[red]Scenario {base_id!r} not found[/]")
         sys.exit(1)
 
     corpus_path = Path(corpus_dir) if corpus_dir else None

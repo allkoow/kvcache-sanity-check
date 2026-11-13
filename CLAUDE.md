@@ -38,21 +38,30 @@ Exits with code 1 if any scenario fails.
 kvcache_sanity/
   main.py        CLI entry point (Click)
   models.py      Pydantic data models: Document, Scenario, EvaluationResult, TestResult
-  corpus.py      Load .txt documents from corpus/
+  corpus.py      Load .txt documents from data/corpus/, merged with the user corpus dir
+  scenarios.py   Load scenario YAML from data/scenarios/, merged with the user scenarios dir
+  paths.py       user_data_dir() — XDG-based location for user corpus/scenarios
   runner.py      Build multi-turn conversations and call the inference server
   evaluator.py   LLM-as-judge comparison between target and reference answers
   report.py      Rich-formatted terminal output
 
-scenarios/
-  default.yaml   Built-in test scenarios
-
-corpus/
-  doc_s1_python.txt          ~500 words — Python language history
-  doc_s2_coffee.txt          ~600 words — Coffee origins
-  doc_m1_apollo.txt          ~1100 words — Apollo space program
-  doc_m2_dna.txt             ~1000 words — DNA double helix discovery
-  doc_l1_french_revolution.txt  ~1600 words — French Revolution
+  data/
+    scenarios/
+      default.yaml   Built-in test scenarios
+      presets/       Context-length presets (4k/8k/32k/128k.yaml)
+    corpus/
+      doc_s1_python.txt          ~500 words — Python language history
+      doc_s2_coffee.txt          ~600 words — Coffee origins
+      doc_m1_apollo.txt          ~1100 words — Apollo space program
+      doc_m2_dna.txt             ~1000 words — DNA double helix discovery
+      doc_l1_french_revolution.txt  ~1600 words — French Revolution
 ```
+
+`corpus.py`/`scenarios.py` resolve the bundled `data/` via `importlib.resources`, not `Path(__file__)` — this is what makes the corpus and default scenarios ship inside the installed wheel and still resolve correctly outside a source checkout.
+
+**Bundled vs. user data** — with no explicit `--corpus-dir`/`--scenarios-file`/`--scenarios`, `load_documents()`/`load_scenarios()` load the bundled `data/` and merge in `user_data_dir()/corpus/*.txt` and `user_data_dir()/scenarios/*.yaml` on top (user `doc_id`/scenario `id` wins on a match). `user_data_dir()` defaults to `~/.local/share/kvcache-sanity-check` (or `$XDG_DATA_HOME/kvcache-sanity-check`), overridable via `KVCACHE_DATA_DIR`. Passing `--corpus-dir`/`--scenarios-file` explicitly bypasses this merge entirely — that directory/file is used exclusively. Note that `--corpus-dir` always governs corpus lookup regardless of which scenario source is picked, so an explicit `--corpus-dir` combined with `--scenarios NAME` for a bundled preset can fail to find documents that only exist in the bundled/user corpus.
+
+**`--scenarios NAME`** — `scenarios.find_named_scenarios()` resolves a bare name (e.g. `32k`) against the user scenarios dir, then the bundled presets dir, then the bundled top-level `data/scenarios/` (so `--scenarios default` works too), user data winning on a name collision. This exists because `--scenarios-file` needs a literal filesystem path, and the bundled presets don't sit at a predictable relative path once installed — see `kvcache_sanity/data/scenarios/presets/`. Mutually exclusive with `--scenarios-file`.
 
 ### Evaluation design
 
@@ -68,10 +77,10 @@ Questions are intentionally about **early documents** in the conversation (loade
 
 ## Extending
 
-**Add documents** — drop `.txt` files in `corpus/`. First line must be `# Title`, remainder is the body.
+**Add documents without touching the install** — drop `.txt` files in `~/.local/share/kvcache-sanity-check/corpus/` (or wherever `KVCACHE_DATA_DIR` points); merged on top of the bundled corpus. First line must be `# Title`, remainder is the body. To modify the bundled set directly, edit `kvcache_sanity/data/corpus/`.
 
-**Add scenarios** — add entries to `scenarios/default.yaml` or pass `--scenarios-file path/to/custom.yaml`.
+**Add scenarios without touching the install** — drop `.yaml` files in `~/.local/share/kvcache-sanity-check/scenarios/`; merged on top of `kvcache_sanity/data/scenarios/default.yaml`. Or pass `--scenarios-file path/to/custom.yaml` to use only that file.
 
-**Custom corpus** — pass `--corpus-dir`.
+**Custom corpus** — pass `--corpus-dir` to use only that directory (bypasses both bundled and user data).
 
 **TODO: LMCache fault injection** — integrate with the LMCache control API to programmatically vary the KV eviction/failure rate and sweep quality-vs-eviction-rate curves. This would let the tool drive the failure rate rather than just observe it, enabling systematic characterization of the degradation boundary.

@@ -1,0 +1,28 @@
+# Context-length preset: ~128K window.
+#
+#   docs (~115366 tok) + answer (--max-tokens 2048) + overhead (~300 tok)
+#     ≈ 117714 / 131072  →  ~10% headroom
+#
+# Run with:
+#   kvcache-check --target-url ... --model ... \
+#     --scenarios-file scenarios/presets/128k.yaml --max-tokens 2048
+#
+# Extends the built-in early_doc_recall scenario (scenarios/default.yaml)
+# with one extra large document to reach the ~128K budget.
+
+scenarios:
+  - id: ctx128k_early_doc_recall
+    description: "~128K context budget; recall the first document loaded (earliest KV blocks, highest eviction risk)"
+    document_ids:
+      - doc_history_of_the_internet
+      - doc_world_war_ii
+      - doc_climate_change
+      - doc_ancient_rome
+      - doc_black_death
+      - doc_history_of_aviation
+    question: "Summarize Document 1 only — do not mention any other documents. What is it about and what are exactly two specific facts from it?"
+    target_doc_id: doc_history_of_the_internet
+    key_facts:
+      - Internet
+      - ARPANET
+      - Tim Berners-Lee

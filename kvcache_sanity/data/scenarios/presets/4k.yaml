@@ -1,0 +1,29 @@
+# Context-length preset: ~4K window.
+#
+# Document budget is chosen to land clearly below the window so the run
+# doesn't error out on a snug context, even though the corpus's token
+# estimate (~4 chars/token) is only approximate:
+#
+#   docs (~2805 tok) + answer (--max-tokens 256) + overhead (~300 tok)
+#     ≈ 3361 / 4096  →  ~18% headroom
+#
+# Run with:
+#   kvcache-check --target-url ... --model ... \
+#     --scenarios-file scenarios/presets/4k.yaml --max-tokens 256
+#
+# If your server's --max-tokens default (1024) is used instead, the
+# headroom shrinks to ~10%; still safe but less margin for eviction noise.
+
+scenarios:
+  - id: ctx4k_early_doc_recall
+    description: "~4K context budget; recall the first (smallest) document loaded"
+    document_ids:
+      - doc_s1_python
+      - doc_s2_coffee
+      - doc_m1_apollo
+    question: "Summarize Document 1 only — do not mention any other documents. What is it about and what are exactly two specific facts from it?"
+    target_doc_id: doc_s1_python
+    key_facts:
+      - Python
+      - Guido van Rossum
+      - Monty Python

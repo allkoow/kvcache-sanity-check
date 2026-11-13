@@ -1,0 +1,23 @@
+# Context-length preset: ~8K window.
+#
+#   docs (~6061 tok) + answer (--max-tokens 512) + overhead (~300 tok)
+#     ≈ 6873 / 8192  →  ~16% headroom
+#
+# Run with:
+#   kvcache-check --target-url ... --model ... \
+#     --scenarios-file scenarios/presets/8k.yaml --max-tokens 512
+
+scenarios:
+  - id: ctx8k_early_doc_recall
+    description: "~8K context budget; recall the first document loaded (earliest KV blocks, highest eviction risk)"
+    document_ids:
+      - doc_s1_python
+      - doc_m1_apollo
+      - doc_m2_dna
+      - doc_l1_french_revolution
+    question: "Summarize Document 1 only — do not mention any other documents. What is it about and what are exactly two specific facts from it?"
+    target_doc_id: doc_s1_python
+    key_facts:
+      - Python
+      - Guido van Rossum
+      - Monty Python
