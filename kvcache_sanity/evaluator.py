@@ -5,19 +5,17 @@ from openai import OpenAI
 from rich.console import Console as _Console
 from rich.markup import escape
 from kvcache_sanity.models import EvaluationResult, EvaluationTrace, JudgeAttemptLog
+from kvcache_sanity.runner import HARMONY_FINAL_MARKER
 
 _stderr = _Console(stderr=True)
 
-# gpt-oss emits harmony channels ("analysis…assistantfinal…") inside `content` when the
-# server runs without a reasoning parser; only the final channel carries the verdict.
-_HARMONY_FINAL_MARKER = "assistantfinal"
-
 
 def _strip_reasoning(raw: str) -> str:
-    marker_pos = raw.rfind(_HARMONY_FINAL_MARKER)
+    """Keep only the harmony final channel; only it carries the verdict."""
+    marker_pos = raw.rfind(HARMONY_FINAL_MARKER)
     if marker_pos == -1:
         return raw
-    return raw[marker_pos + len(_HARMONY_FINAL_MARKER):].strip()
+    return raw[marker_pos + len(HARMONY_FINAL_MARKER):].strip()
 
 
 def _extract_json(raw: str) -> str:

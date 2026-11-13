@@ -60,6 +60,7 @@ class TestResult(BaseModel):
     status: ResultStatus
     error: Optional[str] = None
     target_request_id: str = ""
+    target_truncation: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +77,11 @@ class RunResult:
     completion_tokens: int = 0
     request_id: str = ""
     request_time: str = ""
+    reasoning_tokens: Optional[int] = None  # only when the server reports it
+    # Set only for finish_reason == "length": "loop" when the output tail repeats itself, else "budget".
+    truncation: Optional[str] = None
+    # Set only for finish_reason == "length": True when the cut happened before the final answer began.
+    truncated_in_reasoning: Optional[bool] = None
 
 
 # ---------------------------------------------------------------------------
@@ -119,6 +125,9 @@ class ReferenceAttemptLog(BaseModel):
     request_id: str = ""
     request_time: str = ""
     complete: bool
+    reasoning_tokens: Optional[int] = None
+    truncation: Optional[str] = None
+    truncated_in_reasoning: Optional[bool] = None
 
 
 class RunLog(BaseModel):
@@ -135,6 +144,9 @@ class RunLog(BaseModel):
     target_request_time: str = ""
     target_finish_reason: str = ""
     target_completion_tokens: int = 0
+    target_reasoning_tokens: Optional[int] = None
+    target_truncation: Optional[str] = None
+    target_truncated_in_reasoning: Optional[bool] = None
     temperature: float | None = None
     judge_messages: list[MessageLog]
     judge_raw_response: str

@@ -1,3 +1,4 @@
+import re
 import uuid
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -10,6 +11,72 @@ _stderr = _Console(stderr=True)
 _MAX_EMPTY_RETRIES = 3
 DEFAULT_REFERENCE_RETRIES = 2
 
+# gpt-oss emits harmony channels ("analysis…assistantfinal…") inside `content` when the
+# server runs without a reasoning parser.
+HARMONY_FINAL_MARKER = "assistantfinal"
+_HARMONY_ANALYSIS_PREFIX = "analysis"
+
+# Loop detection looks at the tail of a truncated output: in a degenerate loop most
+# fixed-length substrings of the tail occur more than once, in normal prose almost none do.
+_LOOP_TAIL_CHARS = 2000
+_LOOP_MIN_TAIL_CHARS = 200
+_LOOP_SHINGLE_CHARS = 32
+_LOOP_REPEATED_RATIO = 0.5
+_DIGITS = re.compile(r"\d")
+
+
+def repeated_tail_ratio(text: str) -> float:
+    """Fraction of 32-char substrings in the output tail that already appeared earlier in that tail.
+
+    Digits are masked so loops that only advance a counter ("Step 7: …", "Step 8: …") still count.
+    """
+
+    tail = _DIGITS.sub("0", " ".join(text.split()))[-_LOOP_TAIL_CHARS:]
+
+    if len(tail) < _LOOP_MIN_TAIL_CHARS:
+        return 0.0
+
+    total = len(tail) - _LOOP_SHINGLE_CHARS + 1
+    unique = {tail[i:i + _LOOP_SHINGLE_CHARS] for i in range(total)}
+
+    return 1 - len(unique) / total
+
+
+def classify_truncation(text: str) -> str:
+    """'loop' when a truncated output is repeating itself (more tokens would not help), else 'budget'."""
+    return "loop" if repeated_tail_ratio(text) >= _LOOP_REPEATED_RATIO else "budget"
+
+
+def _truncated_in_reasoning(content: str, reasoning: str) -> bool:
+    """True when generation stopped before the final answer began."""
+
+    stripped = content.lstrip()
+    if stripped.startswith(_HARMONY_ANALYSIS_PREFIX):
+        return HARMONY_FINAL_MARKER not in stripped
+
+    return bool(reasoning.strip()) and not stripped
+
+
+def describe_generation(run: RunResult) -> str:
+    """One-line summary of how a generation ended, for warnings and incomplete-case reasons."""
+
+    parts = [f"finish_reason={run.finish_reason!r}"]
+    if run.truncation:
+        parts.append(f"truncation={run.truncation}")
+
+    if run.truncated_in_reasoning is not None:
+        parts.append(f"truncated_in_reasoning={run.truncated_in_reasoning}")
+
+    parts.append(f"completion_tokens={run.completion_tokens}")
+
+    if run.reasoning_tokens is not None:
+        parts.append(f"reasoning_tokens={run.reasoning_tokens}")
+
+    parts.append(f"answer_chars={len(run.answer.strip())}")
+    parts.append(f"request_id={run.request_id}")
+
+    return ", ".join(parts)
+
 
 def _call_api(
     client: OpenAI,
@@ -19,19 +86,14 @@ def _call_api(
     label: str = "",
     temperature: float = 0.1,
     empty_retries: int = _MAX_EMPTY_RETRIES,
-) -> tuple[str, str, int, str, str]:
+) -> RunResult:
     """Call the chat completions API, retrying on empty answers and warning on truncation.
 
-    Returns (answer, finish_reason, completion_tokens, request_id, request_time).
     request_time is an ISO-8601 UTC timestamp captured immediately after the response
     is received — useful for correlating with server-side logs.
     """
     tag = escape(f" [{label}]") if label else ""
-    answer = ""
-    finish_reason = ""
-    completion_tokens = 0
-    request_id = ""
-    request_time = ""
+    run = RunResult(answer="", messages=messages)
 
     for attempt in range(empty_retries + 1):
         response = client.chat.completions.create(
@@ -40,37 +102,49 @@ def _call_api(
             max_tokens=max_tokens,
             temperature=temperature,
         )
-        request_time = datetime.now(timezone.utc).isoformat()
         choice = response.choices[0]
-        answer = choice.message.content or ""
-        finish_reason = choice.finish_reason or ""
-        completion_tokens = (response.usage.completion_tokens if response.usage else 0)
-        request_id = response.id or ""
+        usage = response.usage
+        details = getattr(usage, "completion_tokens_details", None) if usage else None
+        reasoning = getattr(choice.message, "reasoning_content", None) or getattr(choice.message, "reasoning", None)
+        reasoning = reasoning if isinstance(reasoning, str) else ""
+        run = RunResult(
+            answer=choice.message.content or "",
+            messages=messages,
+            finish_reason=choice.finish_reason or "",
+            completion_tokens=usage.completion_tokens if usage else 0,
+            request_id=response.id or "",
+            request_time=datetime.now(timezone.utc).isoformat(),
+            reasoning_tokens=getattr(details, "reasoning_tokens", None),
+        )
 
-        if finish_reason == "length":
+        if run.finish_reason == "length":
+            run.truncation = classify_truncation(reasoning + "\n" + run.answer)
+            run.truncated_in_reasoning = _truncated_in_reasoning(run.answer, reasoning)
+            advice = (
+                "Output is repeating itself; more tokens will not help."
+                if run.truncation == "loop"
+                else "Consider increasing --max-tokens."
+            )
             _stderr.print(
                 f"[yellow]WARNING[/yellow]: response truncated at {max_tokens} tokens "
-                f"(completion_tokens={completion_tokens}, request_id={request_id}){tag}. "
-                "Consider increasing --max-tokens."
+                f"({describe_generation(run)}){tag}. {advice}"
             )
 
-        if answer.strip():
-            return answer, finish_reason, completion_tokens, request_id, request_time
+        if run.answer.strip():
+            return run
 
         if attempt < empty_retries:
             _stderr.print(
                 f"[yellow]WARNING[/yellow]: empty answer on attempt {attempt + 1}/{empty_retries}{tag}. "
-                f"finish_reason={finish_reason!r}, completion_tokens={completion_tokens}, "
-                f"request_id={request_id}. Retrying…"
+                f"{describe_generation(run)}. Retrying…"
             )
         elif empty_retries > 0:
             _stderr.print(
                 f"[red]WARNING[/red]: empty answer after {empty_retries} retries{tag}. "
-                f"finish_reason={finish_reason!r}, completion_tokens={completion_tokens}, "
-                f"request_id={request_id}. Giving up."
+                f"{describe_generation(run)}. Giving up."
             )
 
-    return answer, finish_reason, completion_tokens, request_id, request_time
+    return run
 
 # Short hardcoded acknowledgment so conversation structure is identical
 # between target and reference runs. This ensures the only variable is
@@ -128,18 +202,9 @@ def run_scenario(
 ) -> RunResult:
     messages = build_messages(scenario, documents, unique_prefix)
     label = f"scenario={scenario.id}, prefix={'ref' if unique_prefix else 'target'}"
-    answer, finish_reason, completion_tokens, request_id, request_time = _call_api(
-        client, model, messages, max_tokens, label, temperature=temperature, empty_retries=empty_retries,
-    )
-    return RunResult(
-        answer=answer,
-        messages=messages,
-        unique_prefix=unique_prefix,
-        finish_reason=finish_reason,
-        completion_tokens=completion_tokens,
-        request_id=request_id,
-        request_time=request_time,
-    )
+    run = _call_api(client, model, messages, max_tokens, label, temperature=temperature, empty_retries=empty_retries)
+    run.unique_prefix = unique_prefix
+    return run
 
 
 def get_reference_answer(
@@ -230,18 +295,9 @@ def run_sequential_pair(
     """Run the conversation up to pair_index and return the answer for that pair."""
     messages = build_pairs_messages(pairs, documents, pair_index, unique_prefix)
     label = f"pair={pair_index}, prefix={'ref' if unique_prefix else 'target'}"
-    answer, finish_reason, completion_tokens, request_id, request_time = _call_api(
-        client, model, messages, max_tokens, label, temperature=temperature, empty_retries=empty_retries,
-    )
-    return RunResult(
-        answer=answer,
-        messages=messages,
-        unique_prefix=unique_prefix,
-        finish_reason=finish_reason,
-        completion_tokens=completion_tokens,
-        request_id=request_id,
-        request_time=request_time,
-    )
+    run = _call_api(client, model, messages, max_tokens, label, temperature=temperature, empty_retries=empty_retries)
+    run.unique_prefix = unique_prefix
+    return run
 
 
 def get_reference_pair_answer(
@@ -304,8 +360,7 @@ def prepare_reference(
         outcome = "Retrying with a fresh prefix…" if attempt < max_attempts else "Giving up."
         _stderr.print(
             f"[yellow]WARNING[/yellow]: incomplete reference on attempt {attempt}/{max_attempts}{tag} "
-            f"(finish_reason={run.finish_reason!r}, completion_tokens={run.completion_tokens}, "
-            f"answer_chars={len(run.answer.strip())}, request_id={run.request_id}). {outcome}"
+            f"({describe_generation(run)}). {outcome}"
         )
 
     return attempts

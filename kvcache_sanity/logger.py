@@ -61,6 +61,9 @@ class RunLogger:
                 request_id=attempt.request_id,
                 request_time=attempt.request_time,
                 complete=is_complete(attempt),
+                reasoning_tokens=attempt.reasoning_tokens,
+                truncation=attempt.truncation,
+                truncated_in_reasoning=attempt.truncated_in_reasoning,
             )
             for attempt in reference_attempts or []
         ]
@@ -78,6 +81,9 @@ class RunLogger:
             target_request_time=target.request_time,
             target_finish_reason=target.finish_reason,
             target_completion_tokens=target.completion_tokens,
+            target_reasoning_tokens=target.reasoning_tokens,
+            target_truncation=target.truncation,
+            target_truncated_in_reasoning=target.truncated_in_reasoning,
             temperature=temperature,
             judge_messages=_truncate_messages(trace.judge_messages),
             judge_raw_response=trace.judge_raw_response,

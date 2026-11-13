@@ -32,6 +32,7 @@ from kvcache_sanity.models import (
 )
 from kvcache_sanity.runner import (
     DEFAULT_REFERENCE_RETRIES,
+    describe_generation,
     get_reference_answer,
     get_reference_pair_answer,
     is_complete,
@@ -159,7 +160,7 @@ def _run_reference(
     try:
         attempts = prepare_reference(generate, prefix, retries=context.reference_retries, label=label)
     except Exception as exc:
-        return ReferenceRun(error=str(exc))
+        return ReferenceRun(error=str(exc) or repr(exc))
 
     return ReferenceRun(attempts=attempts)
 
@@ -171,19 +172,12 @@ def _evaluation_status(trace: EvaluationTrace) -> ResultStatus:
 
 
 def _incomplete_target_evaluation(target_run: RunResult) -> EvaluationResult:
-    reasoning = (
-        f"[target incomplete, judge skipped] finish_reason={target_run.finish_reason!r}, "
-        f"completion_tokens={target_run.completion_tokens}, answer_chars={len(target_run.answer.strip())}"
-    )
+    reasoning = f"[target incomplete, judge skipped] {describe_generation(target_run)}"
     return EvaluationResult(score=0.0, reasoning=reasoning, passed=False)
 
 
 def _incomplete_reference_evaluation(attempts: list[RunResult]) -> EvaluationResult:
-    last = attempts[-1]
-    reasoning = (
-        f"[reference incomplete after {len(attempts)} attempt(s)] "
-        f"finish_reason={last.finish_reason!r}, completion_tokens={last.completion_tokens}"
-    )
+    reasoning = f"[reference incomplete after {len(attempts)} attempt(s)] {describe_generation(attempts[-1])}"
     return EvaluationResult(score=0.0, reasoning=reasoning, passed=False)
 
 
@@ -235,6 +229,7 @@ def _run_scenario_iterations(context: RunContext, scenario: Scenario, temperatur
                     evaluation=trace.result,
                     status=status,
                     target_request_id=target_run.request_id,
+                    target_truncation=target_run.truncation,
                 )
             except Exception as exc:
                 error = str(exc)
@@ -312,6 +307,7 @@ def _run_sequential_pairs(context: RunContext, scenario: Scenario, temperature: 
                         evaluation=trace.result,
                         status=status,
                         target_request_id=target_run.request_id,
+                        target_truncation=target_run.truncation,
                     )
                 except Exception as exc:
                     error = str(exc)
@@ -385,9 +381,9 @@ def _run_sequential_pairs(context: RunContext, scenario: Scenario, temperature: 
               help="Append full run traces (JSON Lines) to this file for later review with kvcache-logs.")
 @click.option("--accuracy-csv", default=None, type=click.Path(), metavar="PATH",
               help="Write a CloudAI-compatible accuracy CSV (Task,Correct,Total,Accuracy,Invalid,"
-                   "ReferenceIncomplete,TargetIncomplete,JudgeError with an OVERALL row) to PATH. Per-scenario "
-                   "pass/fail is aggregated into a 0.0-1.0 fraction; Invalid and TargetIncomplete iterations count "
-                   "in Total. "
+                   "ReferenceIncomplete,TargetIncomplete,JudgeError,TargetLoop with an OVERALL row) to PATH. "
+                   "Per-scenario pass/fail is aggregated into a 0.0-1.0 fraction; Invalid and TargetIncomplete "
+                   "iterations count in Total; TargetLoop is the subset of TargetIncomplete cut while repeating. "
                    "The file is written regardless of the exit code.")
 @click.option("--verbose", "-v", is_flag=True,
               help="Print target and reference answers for every test, not just failures.")

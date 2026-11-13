@@ -64,26 +64,36 @@ def print_summary(results: list[TestResult]) -> None:
 
 _CSV_HEADER = [
     "Task", "Correct", "Total", "Accuracy", "Invalid", "ReferenceIncomplete", "TargetIncomplete", "JudgeError",
+    "TargetLoop",
 ]
 
 
 def _csv_row(task: str, results: list[TestResult]) -> list:
     statuses = Counter(result.status for result in results)
     correct = sum(1 for result in results if result.evaluation.passed)
+
     total = len(results)
     accuracy = correct / total if total else 0.0
+
     reference_incomplete = statuses[ResultStatus.REFERENCE_INCOMPLETE]
     judge_error = statuses[ResultStatus.JUDGE_ERROR]
+
+    target_loop = sum(
+        1 for result in results
+        if result.status == ResultStatus.TARGET_INCOMPLETE and result.target_truncation == "loop"
+    )
+
     return [
         task, correct, total, f"{accuracy:.4f}",
         reference_incomplete + judge_error, reference_incomplete, statuses[ResultStatus.TARGET_INCOMPLETE], judge_error,
+        target_loop
     ]
 
 
 def write_accuracy_csv(results: list[TestResult], path: Path) -> None:
     """Write results as a CloudAI-compatible accuracy CSV.
 
-    Columns are ``Task,Correct,Total,Accuracy,Invalid,ReferenceIncomplete,TargetIncomplete,JudgeError``
+    Columns are ``Task,Correct,Total,Accuracy,Invalid,ReferenceIncomplete,TargetIncomplete,JudgeError,TargetLoop``
     with one row per scenario (Correct = passed iterations, Accuracy = Correct/Total as a
     0.0-1.0 fraction) plus a final OVERALL row aggregating every iteration. CloudAI's
     AIDynamo report strategy reads the Accuracy of the OVERALL row by column name, so the
@@ -95,7 +105,9 @@ def write_accuracy_csv(results: list[TestResult], path: Path) -> None:
     Accuracy, so consumers that ignore the extra columns keep seeing them as failures.
 
     TargetIncomplete counts truncated or empty target answers. They are incorrect answers,
-    not invalid ones: part of Total, never of Correct or Invalid.
+    not invalid ones: part of Total, never of Correct or Invalid. TargetLoop is the subset of
+    TargetIncomplete truncated while repeating itself next to a complete reference, a possible
+    sign of corrupted KV blocks rather than a too small token budget.
     """
     # Insertion-ordered so the CSV mirrors run order.
     per_scenario: dict[str, list[TestResult]] = {}
