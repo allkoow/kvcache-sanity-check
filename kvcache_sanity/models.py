@@ -1,6 +1,15 @@
 from dataclasses import dataclass, field
+from enum import Enum
 from pydantic import BaseModel
 from typing import Optional
+
+
+class ResultStatus(str, Enum):
+    PASS = "PASS"
+    FAIL = "FAIL"
+    ERROR = "ERROR"
+    # No complete reference after all attempts: the case says nothing about the cache path.
+    REFERENCE_INCOMPLETE = "REFERENCE_INCOMPLETE"
 
 
 class Document(BaseModel):
@@ -44,6 +53,7 @@ class TestResult(BaseModel):
     target_answer: str
     reference_answer: str
     evaluation: EvaluationResult
+    status: ResultStatus
     error: Optional[str] = None
     target_request_id: str = ""
 
@@ -86,6 +96,16 @@ class MessageLog(BaseModel):
     content: str  # document content is truncated at log-write time
 
 
+class ReferenceAttemptLog(BaseModel):
+    prefix: str
+    answer: str
+    finish_reason: str
+    completion_tokens: int
+    request_id: str = ""
+    request_time: str = ""
+    complete: bool
+
+
 class RunLog(BaseModel):
     timestamp: str
     scenario_id: str
@@ -103,4 +123,6 @@ class RunLog(BaseModel):
     judge_raw_response: str
     judge_attempts: int = 1
     evaluation: EvaluationResult
+    status: ResultStatus | None = None  # absent in logs written before statuses existed
+    reference_attempts: list[ReferenceAttemptLog] = []
     error: Optional[str] = None

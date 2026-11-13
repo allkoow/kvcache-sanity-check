@@ -6,11 +6,14 @@ from kvcache_sanity.models import (
     EvaluationResult,
     EvaluationTrace,
     MessageLog,
+    ReferenceAttemptLog,
+    ResultStatus,
     RunLog,
     RunResult,
     Scenario,
     TestResult,
 )
+from kvcache_sanity.runner import is_complete
 
 _DOC_TRUNCATE_LIMIT = 200
 
@@ -46,7 +49,21 @@ class RunLogger:
         trace: EvaluationTrace,
         error: str | None = None,
         temperature: float | None = None,
+        status: ResultStatus | None = None,
+        reference_attempts: list[RunResult] | None = None,
     ) -> None:
+        attempt_logs = [
+            ReferenceAttemptLog(
+                prefix=attempt.unique_prefix or "",
+                answer=attempt.answer,
+                finish_reason=attempt.finish_reason,
+                completion_tokens=attempt.completion_tokens,
+                request_id=attempt.request_id,
+                request_time=attempt.request_time,
+                complete=is_complete(attempt),
+            )
+            for attempt in reference_attempts or []
+        ]
         run_log = RunLog(
             timestamp=datetime.now(timezone.utc).isoformat(),
             scenario_id=scenario.id,
@@ -64,6 +81,8 @@ class RunLogger:
             judge_raw_response=trace.judge_raw_response,
             judge_attempts=trace.judge_attempts,
             evaluation=trace.result,
+            status=status,
+            reference_attempts=attempt_logs,
             error=error,
         )
         with open(self._path, "a", encoding="utf-8") as f:

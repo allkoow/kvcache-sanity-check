@@ -1,11 +1,14 @@
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timezone
 from openai import OpenAI
 from rich.console import Console as _Console
+from rich.markup import escape
 from kvcache_sanity.models import Scenario, ScenarioPair, Document, RunResult
 
 _stderr = _Console(stderr=True)
 _MAX_EMPTY_RETRIES = 3
+DEFAULT_REFERENCE_RETRIES = 2
 
 
 def _call_api(
@@ -15,6 +18,7 @@ def _call_api(
     max_tokens: int,
     label: str = "",
     temperature: float = 0.1,
+    empty_retries: int = _MAX_EMPTY_RETRIES,
 ) -> tuple[str, str, int, str, str]:
     """Call the chat completions API, retrying on empty answers and warning on truncation.
 
@@ -22,14 +26,14 @@ def _call_api(
     request_time is an ISO-8601 UTC timestamp captured immediately after the response
     is received — useful for correlating with server-side logs.
     """
-    tag = f" [{label}]" if label else ""
+    tag = escape(f" [{label}]") if label else ""
     answer = ""
     finish_reason = ""
     completion_tokens = 0
     request_id = ""
     request_time = ""
 
-    for attempt in range(_MAX_EMPTY_RETRIES + 1):
+    for attempt in range(empty_retries + 1):
         response = client.chat.completions.create(
             model=model,
             messages=messages,
@@ -53,15 +57,15 @@ def _call_api(
         if answer.strip():
             return answer, finish_reason, completion_tokens, request_id, request_time
 
-        if attempt < _MAX_EMPTY_RETRIES:
+        if attempt < empty_retries:
             _stderr.print(
-                f"[yellow]WARNING[/yellow]: empty answer on attempt {attempt + 1}/{_MAX_EMPTY_RETRIES}{tag}. "
+                f"[yellow]WARNING[/yellow]: empty answer on attempt {attempt + 1}/{empty_retries}{tag}. "
                 f"finish_reason={finish_reason!r}, completion_tokens={completion_tokens}, "
                 f"request_id={request_id}. Retrying…"
             )
-        else:
+        elif empty_retries > 0:
             _stderr.print(
-                f"[red]WARNING[/red]: empty answer after {_MAX_EMPTY_RETRIES} retries{tag}. "
+                f"[red]WARNING[/red]: empty answer after {empty_retries} retries{tag}. "
                 f"finish_reason={finish_reason!r}, completion_tokens={completion_tokens}, "
                 f"request_id={request_id}. Giving up."
             )
@@ -120,10 +124,13 @@ def run_scenario(
     unique_prefix: str | None = None,
     max_tokens: int = 1024,
     temperature: float = 0.1,
+    empty_retries: int = _MAX_EMPTY_RETRIES,
 ) -> RunResult:
     messages = build_messages(scenario, documents, unique_prefix)
     label = f"scenario={scenario.id}, prefix={'ref' if unique_prefix else 'target'}"
-    answer, finish_reason, completion_tokens, request_id, request_time = _call_api(client, model, messages, max_tokens, label, temperature=temperature)
+    answer, finish_reason, completion_tokens, request_id, request_time = _call_api(
+        client, model, messages, max_tokens, label, temperature=temperature, empty_retries=empty_retries,
+    )
     return RunResult(
         answer=answer,
         messages=messages,
@@ -149,10 +156,15 @@ def get_reference_answer(
     If prefix is supplied it is reused (so subsequent target calls with the same
     prefix will hit blocks cached by this reference call). If omitted a fresh UUID
     is generated, which is appropriate when the caller wants an isolated ground truth.
+
+    Empty answers are not retried here: the prefix is already cached after the first call,
+    so a retry under it would not be a clean recompute. Use prepare_reference instead.
     """
     if prefix is None:
         prefix = str(uuid.uuid4())
-    return run_scenario(scenario, documents, client, model, prefix, max_tokens, temperature=temperature)
+    return run_scenario(
+        scenario, documents, client, model, prefix, max_tokens, temperature=temperature, empty_retries=0,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -213,11 +225,14 @@ def run_sequential_pair(
     unique_prefix: str | None = None,
     max_tokens: int = 1024,
     temperature: float = 0.1,
+    empty_retries: int = _MAX_EMPTY_RETRIES,
 ) -> RunResult:
     """Run the conversation up to pair_index and return the answer for that pair."""
     messages = build_pairs_messages(pairs, documents, pair_index, unique_prefix)
     label = f"pair={pair_index}, prefix={'ref' if unique_prefix else 'target'}"
-    answer, finish_reason, completion_tokens, request_id, request_time = _call_api(client, model, messages, max_tokens, label, temperature=temperature)
+    answer, finish_reason, completion_tokens, request_id, request_time = _call_api(
+        client, model, messages, max_tokens, label, temperature=temperature, empty_retries=empty_retries,
+    )
     return RunResult(
         answer=answer,
         messages=messages,
@@ -242,8 +257,55 @@ def get_reference_pair_answer(
     """Same as run_sequential_pair but with a cache-busting prefix to force a cache miss.
 
     If prefix is supplied it is reused so subsequent target calls with the same
-    prefix will hit blocks cached by this reference call.
+    prefix will hit blocks cached by this reference call. Empty answers are not
+    retried, see get_reference_answer.
     """
     if prefix is None:
         prefix = str(uuid.uuid4())
-    return run_sequential_pair(pairs, documents, client, model, pair_index, prefix, max_tokens, temperature=temperature)
+    return run_sequential_pair(
+        pairs, documents, client, model, pair_index, prefix, max_tokens, temperature=temperature, empty_retries=0,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Reference preparation
+# ---------------------------------------------------------------------------
+
+def is_complete(run: RunResult) -> bool:
+    """A generation is complete when the server stopped on its own and returned a non-empty answer."""
+    return run.finish_reason == "stop" and bool(run.answer.strip())
+
+
+def prepare_reference(
+    generate: Callable[[str], RunResult],
+    prefix: str,
+    retries: int = DEFAULT_REFERENCE_RETRIES,
+    label: str = "",
+) -> list[RunResult]:
+    """Generate the reference, retrying incomplete ones (truncated or empty) under a fresh prefix.
+
+    generate(prefix) runs the reference conversation with the given cache-busting prefix.
+    A retry never reuses a prefix: the failed attempt has already cached its blocks, so the
+    next call under it would not be a clean recompute.
+
+    Returns every attempt in order. The last one is the reference to use; it is incomplete
+    only when all attempts failed.
+    """
+    tag = escape(f" [{label}]") if label else ""
+    max_attempts = max(retries, 0) + 1
+    attempts: list[RunResult] = []
+
+    for attempt in range(1, max_attempts + 1):
+        run = generate(prefix if attempt == 1 else str(uuid.uuid4()))
+        attempts.append(run)
+        if is_complete(run):
+            break
+
+        outcome = "Retrying with a fresh prefix…" if attempt < max_attempts else "Giving up."
+        _stderr.print(
+            f"[yellow]WARNING[/yellow]: incomplete reference on attempt {attempt}/{max_attempts}{tag} "
+            f"(finish_reason={run.finish_reason!r}, completion_tokens={run.completion_tokens}, "
+            f"answer_chars={len(run.answer.strip())}, request_id={run.request_id}). {outcome}"
+        )
+
+    return attempts

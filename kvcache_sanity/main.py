@@ -16,10 +16,13 @@ from kvcache_sanity.evaluator import (
     evaluate_answers,
 )
 from kvcache_sanity.logger import RunLogger
-from kvcache_sanity.models import EvaluationResult, EvaluationTrace, RunResult, Scenario, TestResult
+from kvcache_sanity.models import EvaluationResult, EvaluationTrace, ResultStatus, RunResult, Scenario, TestResult
 from kvcache_sanity.runner import (
+    DEFAULT_REFERENCE_RETRIES,
     get_reference_answer,
     get_reference_pair_answer,
+    is_complete,
+    prepare_reference,
     run_scenario,
     run_sequential_pair,
 )
@@ -82,23 +85,43 @@ def _load_scenarios(path: Path) -> list[Scenario]:
     return [Scenario(**s) for s in data["scenarios"]]
 
 
+def _evaluation_status(evaluation: EvaluationResult) -> ResultStatus:
+    return ResultStatus.PASS if evaluation.passed else ResultStatus.FAIL
+
+
+def _incomplete_reference_evaluation(attempts: list[RunResult]) -> EvaluationResult:
+    last = attempts[-1]
+    reasoning = (
+        f"[reference incomplete after {len(attempts)} attempt(s)] "
+        f"finish_reason={last.finish_reason!r}, completion_tokens={last.completion_tokens}"
+    )
+    return EvaluationResult(score=0.0, reasoning=reasoning, passed=False)
+
+
 def _run_scenario_iterations(
     *, scenario, documents, target_client, model, judge_model_name, judge_client,
     threshold, max_tokens, judge_prompt, iterations, all_results, run_logger, verbose,
-    temperature, judge_temperature, judge_max_tokens, judge_retries,
+    temperature, judge_temperature, judge_max_tokens, judge_retries, reference_retries,
 ) -> None:
     # Reference runs first with a shared UUID, warming the KV cache.
-    # All target iterations reuse the same UUID so they hit blocks cached
-    # by the reference call — every iteration exercises the cache equally.
+    # All target iterations reuse the UUID of the accepted reference so they hit
+    # blocks cached by the reference call — every iteration exercises the cache equally.
     shared_prefix = str(uuid.uuid4())
 
     reference_run = RunResult(answer="")
+    reference_attempts: list[RunResult] = []
     ref_error: str | None = None
     try:
-        reference_run = get_reference_answer(
-            scenario, documents, target_client, model,
-            max_tokens=max_tokens, prefix=shared_prefix, temperature=temperature,
+        reference_attempts = prepare_reference(
+            lambda prefix: get_reference_answer(
+                scenario, documents, target_client, model,
+                max_tokens=max_tokens, prefix=prefix, temperature=temperature,
+            ),
+            shared_prefix,
+            retries=reference_retries,
+            label=f"scenario={scenario.id}",
         )
+        reference_run = reference_attempts[-1]
     except Exception as exc:
         ref_error = str(exc)
 
@@ -112,13 +135,22 @@ def _run_scenario_iterations(
                 scenario_id=scenario.id, iteration=i, question=scenario.question,
                 target_answer="", reference_answer="",
                 evaluation=EvaluationResult(score=0.0, reasoning=ref_error, passed=False),
+                status=ResultStatus.ERROR,
                 error=ref_error,
+            )
+        elif not is_complete(reference_run):
+            trace = EvaluationTrace(result=_incomplete_reference_evaluation(reference_attempts))
+            result = TestResult(
+                scenario_id=scenario.id, iteration=i, question=scenario.question,
+                target_answer="", reference_answer=reference_run.answer,
+                evaluation=trace.result,
+                status=ResultStatus.REFERENCE_INCOMPLETE,
             )
         else:
             try:
                 target_run = run_scenario(
                     scenario, documents, target_client, model,
-                    unique_prefix=shared_prefix, max_tokens=max_tokens, temperature=temperature,
+                    unique_prefix=reference_run.unique_prefix, max_tokens=max_tokens, temperature=temperature,
                 )
                 trace = evaluate_answers(
                     question=scenario.question,
@@ -137,6 +169,7 @@ def _run_scenario_iterations(
                     scenario_id=scenario.id, iteration=i, question=scenario.question,
                     target_answer=target_run.answer, reference_answer=reference_run.answer,
                     evaluation=trace.result,
+                    status=_evaluation_status(trace.result),
                     target_request_id=target_run.request_id,
                 )
             except Exception as exc:
@@ -145,6 +178,7 @@ def _run_scenario_iterations(
                     scenario_id=scenario.id, iteration=i, question=scenario.question,
                     target_answer=target_run.answer, reference_answer=reference_run.answer,
                     evaluation=EvaluationResult(score=0.0, reasoning=str(exc), passed=False),
+                    status=ResultStatus.ERROR,
                     error=error,
                 )
 
@@ -153,13 +187,13 @@ def _run_scenario_iterations(
         if run_logger:
             run_logger.log(scenario=scenario, iteration=i,
                            target=target_run, reference=reference_run, trace=trace, error=error,
-                           temperature=temperature)
+                           temperature=temperature, status=result.status, reference_attempts=reference_attempts)
 
 
 def _run_sequential_pairs(
     *, scenario, documents, target_client, model, judge_model_name, judge_client,
     threshold, max_tokens, judge_prompt, iterations, all_results, run_logger, verbose,
-    temperature, judge_temperature, judge_max_tokens, judge_retries,
+    temperature, judge_temperature, judge_max_tokens, judge_retries, reference_retries,
 ) -> None:
     pairs = scenario.pairs
     # Reference runs first with a shared UUID per scenario, warming the KV cache.
@@ -171,12 +205,19 @@ def _run_sequential_pairs(
         pair_label = f"pair {pair_idx + 1}/{len(pairs)} (doc={pair.doc_id})"
 
         reference_run = RunResult(answer="")
+        reference_attempts: list[RunResult] = []
         ref_error: str | None = None
         try:
-            reference_run = get_reference_pair_answer(
-                pairs, documents, target_client, model, pair_idx,
-                max_tokens=max_tokens, prefix=shared_prefix, temperature=temperature,
+            reference_attempts = prepare_reference(
+                lambda prefix: get_reference_pair_answer(
+                    pairs, documents, target_client, model, pair_idx,
+                    max_tokens=max_tokens, prefix=prefix, temperature=temperature,
+                ),
+                shared_prefix,
+                retries=reference_retries,
+                label=f"scenario={scenario.id}, {pair_label}",
             )
+            reference_run = reference_attempts[-1]
         except Exception as exc:
             ref_error = str(exc)
 
@@ -191,13 +232,23 @@ def _run_sequential_pairs(
                     iteration=i, question=pair.question,
                     target_answer="", reference_answer="",
                     evaluation=EvaluationResult(score=0.0, reasoning=ref_error, passed=False),
+                    status=ResultStatus.ERROR,
                     error=ref_error,
+                )
+            elif not is_complete(reference_run):
+                trace = EvaluationTrace(result=_incomplete_reference_evaluation(reference_attempts))
+                result = TestResult(
+                    scenario_id=f"{scenario.id}[{pair_label}]",
+                    iteration=i, question=pair.question,
+                    target_answer="", reference_answer=reference_run.answer,
+                    evaluation=trace.result,
+                    status=ResultStatus.REFERENCE_INCOMPLETE,
                 )
             else:
                 try:
                     target_run = run_sequential_pair(
                         pairs, documents, target_client, model, pair_idx,
-                        unique_prefix=shared_prefix, max_tokens=max_tokens, temperature=temperature,
+                        unique_prefix=reference_run.unique_prefix, max_tokens=max_tokens, temperature=temperature,
                     )
                     trace = evaluate_answers(
                         question=pair.question,
@@ -217,6 +268,7 @@ def _run_sequential_pairs(
                         iteration=i, question=pair.question,
                         target_answer=target_run.answer, reference_answer=reference_run.answer,
                         evaluation=trace.result,
+                        status=_evaluation_status(trace.result),
                         target_request_id=target_run.request_id,
                     )
                 except Exception as exc:
@@ -226,6 +278,7 @@ def _run_sequential_pairs(
                         iteration=i, question=pair.question,
                         target_answer=target_run.answer, reference_answer=reference_run.answer,
                         evaluation=EvaluationResult(score=0.0, reasoning=str(exc), passed=False),
+                        status=ResultStatus.ERROR,
                         error=error,
                     )
 
@@ -234,7 +287,7 @@ def _run_sequential_pairs(
             if run_logger:
                 run_logger.log(scenario=scenario, iteration=i,
                                target=target_run, reference=reference_run, trace=trace, error=error,
-                               temperature=temperature)
+                               temperature=temperature, status=result.status, reference_attempts=reference_attempts)
 
 
 @click.command(cls=_ConfigFileCommand)
@@ -264,6 +317,10 @@ def _run_sequential_pairs(
               help="Max tokens for the judge response. Reasoning models spend part of it before the JSON verdict.")
 @click.option("--judge-retries", default=DEFAULT_JUDGE_RETRIES, show_default=True, type=click.IntRange(min=0),
               help="Extra judge calls when a response carries no score (empty, truncated or not JSON).")
+@click.option("--reference-retries", default=DEFAULT_REFERENCE_RETRIES, show_default=True,
+              type=click.IntRange(min=0),
+              help="Extra reference generations, each under a fresh cache-busting prefix, when the reference "
+                   "is truncated or empty. Target answers are never retried.")
 @click.option("--iterations", default=1, show_default=True, type=int,
               help="Number of times to run each scenario. "
                    "Multiple iterations help catch flaky caching failures.")
@@ -290,7 +347,7 @@ def _run_sequential_pairs(
 def cli(
     target_url, model, api_key,
     judge_url, judge_model, judge_api_key,
-    temperature, judge_temperature, judge_max_tokens, judge_retries,
+    temperature, judge_temperature, judge_max_tokens, judge_retries, reference_retries,
     iterations, threshold, scenarios_file, corpus_dir,
     max_tokens, judge_prompt, log_file, accuracy_csv, verbose,
 ):
@@ -324,7 +381,8 @@ def cli(
     console.print(f"Target : {target_base}  model={model}")
     console.print(f"Scenarios: {len(scenarios)}  iterations: {iterations}  threshold: {threshold}")
     console.print(f"Temperature: {temperature}  Judge temperature: {judge_temperature}")
-    console.print(f"Judge max tokens: {judge_max_tokens}  Judge retries: {judge_retries}")
+    console.print(f"Judge max tokens: {judge_max_tokens}  Judge retries: {judge_retries}  "
+                  f"Reference retries: {reference_retries}")
     if run_logger:
         console.print(f"Logging to: {log_file}")
     console.print()
@@ -343,7 +401,7 @@ def cli(
             threshold=threshold, max_tokens=max_tokens, judge_prompt=judge_prompt,
             iterations=iterations, all_results=all_results, run_logger=run_logger, verbose=verbose,
             temperature=effective_temp, judge_temperature=judge_temperature,
-            judge_max_tokens=judge_max_tokens, judge_retries=judge_retries,
+            judge_max_tokens=judge_max_tokens, judge_retries=judge_retries, reference_retries=reference_retries,
         )
         if scenario.mode == "sequential_pairs":
             _run_sequential_pairs(**common)

@@ -4,7 +4,8 @@ from pathlib import Path
 from rich.console import Console
 from rich.panel import Panel
 from rich import box
-from kvcache_sanity.models import TestResult
+from rich.markup import escape
+from kvcache_sanity.models import ResultStatus, TestResult
 
 console = Console()
 
@@ -12,6 +13,12 @@ console = Console()
 def print_result(result: TestResult, verbose: bool = False) -> None:
     if result.error:
         console.print(f"  iter {result.iteration}: [bold red]ERROR[/] — {result.error}")
+        return
+
+    if result.status == ResultStatus.REFERENCE_INCOMPLETE:
+        console.print(
+            f"  iter {result.iteration}: [bold yellow]REFERENCE_INCOMPLETE[/] — {escape(result.evaluation.reasoning)}"
+        )
         return
 
     status = "[bold green]PASS[/]" if result.evaluation.passed else "[bold red]FAIL[/]"
