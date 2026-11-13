@@ -11,11 +11,6 @@ _stderr = _Console(stderr=True)
 _MAX_EMPTY_RETRIES = 3
 DEFAULT_REFERENCE_RETRIES = 2
 
-# gpt-oss emits harmony channels ("analysis…assistantfinal…") inside `content` when the
-# server runs without a reasoning parser.
-HARMONY_FINAL_MARKER = "assistantfinal"
-_HARMONY_ANALYSIS_PREFIX = "analysis"
-
 # Loop detection looks at the tail of a truncated output: in a degenerate loop most
 # fixed-length substrings of the tail occur more than once, in normal prose almost none do.
 _LOOP_TAIL_CHARS = 2000
@@ -48,13 +43,11 @@ def classify_truncation(text: str) -> str:
 
 
 def _truncated_in_reasoning(content: str, reasoning: str) -> bool:
-    """True when generation stopped before the final answer began."""
+    """True when generation stopped before the final answer began.
 
-    stripped = content.lstrip()
-    if stripped.startswith(_HARMONY_ANALYSIS_PREFIX):
-        return HARMONY_FINAL_MARKER not in stripped
-
-    return bool(reasoning.strip()) and not stripped
+    Detectable only when the server returns reasoning in a separate field.
+    """
+    return bool(reasoning.strip()) and not content.strip()
 
 
 def describe_generation(run: RunResult) -> str:

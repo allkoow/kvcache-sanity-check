@@ -10,7 +10,7 @@ scenarios:
       - doc_ancient_rome
       - doc_black_death
     # Two single-answer facts instead of a summary: an open "pick two facts" request made
-    # gpt-oss loop over candidate facts in its reasoning until it hit max_tokens.
+    # the model loop over candidate facts in its reasoning until it hit max_tokens.
     question: "Answer from Document 1 only, in two short sentences: on what date was the first ARPANET link established, and what share of the information flowing through two-way telecommunications networks did the Internet carry in 1993?"
     target_doc_id: doc_history_of_the_internet
     key_facts:
