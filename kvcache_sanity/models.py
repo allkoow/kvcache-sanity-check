@@ -12,6 +12,8 @@ class ResultStatus(str, Enum):
     REFERENCE_INCOMPLETE = "REFERENCE_INCOMPLETE"
     # Truncated or empty target next to a complete reference: counted as an incorrect answer.
     TARGET_INCOMPLETE = "TARGET_INCOMPLETE"
+    # No valid judge verdict after all attempts: the case says nothing about the cache path.
+    JUDGE_ERROR = "JUDGE_ERROR"
 
 
 class Document(BaseModel):
@@ -80,6 +82,15 @@ class RunResult:
 # Evaluator return type — wraps EvaluationResult with the judge trace.
 # ---------------------------------------------------------------------------
 
+class JudgeAttemptLog(BaseModel):
+    prefix: str
+    raw_response: str
+    finish_reason: str
+    completion_tokens: int
+    request_id: str = ""
+    problem: Optional[str] = None  # why the response carried no valid verdict; None when it did
+
+
 @dataclass
 class EvaluationTrace:
     result: EvaluationResult
@@ -87,6 +98,8 @@ class EvaluationTrace:
     judge_raw_response: str = ""
     eval_prefix: str = ""
     judge_attempts: int = 1
+    attempt_logs: list[JudgeAttemptLog] = field(default_factory=list)
+    judge_error: Optional[str] = None  # set when no attempt produced a valid verdict
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +139,7 @@ class RunLog(BaseModel):
     judge_messages: list[MessageLog]
     judge_raw_response: str
     judge_attempts: int = 1
+    judge_attempt_details: list[JudgeAttemptLog] = []
     evaluation: EvaluationResult
     status: ResultStatus | None = None  # absent in logs written before statuses existed
     reference_attempts: list[ReferenceAttemptLog] = []

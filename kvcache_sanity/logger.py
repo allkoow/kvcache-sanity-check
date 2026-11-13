@@ -82,6 +82,7 @@ class RunLogger:
             judge_messages=_truncate_messages(trace.judge_messages),
             judge_raw_response=trace.judge_raw_response,
             judge_attempts=trace.judge_attempts,
+            judge_attempt_details=trace.attempt_logs,
             evaluation=trace.result,
             status=status,
             reference_attempts=attempt_logs,

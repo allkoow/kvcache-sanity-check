@@ -16,6 +16,7 @@ from kvcache_sanity.evaluator import (
     DEFAULT_JUDGE_RETRIES,
     DEFAULT_PROMPT,
     PROMPT_NAMES,
+    JudgeConfig,
     evaluate_answers,
 )
 from kvcache_sanity.logger import RunLogger
@@ -104,13 +105,7 @@ class RunContext:
     documents: dict[str, Document]
     target_client: OpenAI
     model: str
-    judge_client: OpenAI | None
-    judge_model_name: str
-    judge_prompt: str
-    judge_temperature: float
-    judge_max_tokens: int
-    judge_retries: int
-    threshold: float
+    judge: JudgeConfig
     max_tokens: int
     iterations: int
     reference_retries: int
@@ -169,8 +164,10 @@ def _run_reference(
     return ReferenceRun(attempts=attempts)
 
 
-def _evaluation_status(evaluation: EvaluationResult) -> ResultStatus:
-    return ResultStatus.PASS if evaluation.passed else ResultStatus.FAIL
+def _evaluation_status(trace: EvaluationTrace) -> ResultStatus:
+    if trace.judge_error is not None:
+        return ResultStatus.JUDGE_ERROR
+    return ResultStatus.PASS if trace.result.passed else ResultStatus.FAIL
 
 
 def _incomplete_target_evaluation(target_run: RunResult) -> EvaluationResult:
@@ -227,20 +224,8 @@ def _run_scenario_iterations(context: RunContext, scenario: Scenario, temperatur
                     temperature=temperature, empty_retries=0,
                 )
                 if is_complete(target_run):
-                    trace = evaluate_answers(
-                        question=scenario.question,
-                        target_answer=target_run.answer,
-                        reference_answer=reference_run.answer,
-                        client=context.target_client,
-                        model=context.judge_model_name,
-                        threshold=context.threshold,
-                        judge_client=context.judge_client,
-                        judge_prompt=context.judge_prompt,
-                        judge_temperature=context.judge_temperature,
-                        judge_max_tokens=context.judge_max_tokens,
-                        judge_retries=context.judge_retries,
-                    )
-                    status = _evaluation_status(trace.result)
+                    trace = evaluate_answers(scenario.question, target_run.answer, reference_run.answer, context.judge)
+                    status = _evaluation_status(trace)
                 else:
                     trace = EvaluationTrace(result=_incomplete_target_evaluation(target_run))
                     status = ResultStatus.TARGET_INCOMPLETE
@@ -315,20 +300,8 @@ def _run_sequential_pairs(context: RunContext, scenario: Scenario, temperature: 
                         temperature=temperature, empty_retries=0,
                     )
                     if is_complete(target_run):
-                        trace = evaluate_answers(
-                            question=pair.question,
-                            target_answer=target_run.answer,
-                            reference_answer=reference_run.answer,
-                            client=context.target_client,
-                            model=context.judge_model_name,
-                            threshold=context.threshold,
-                            judge_client=context.judge_client,
-                            judge_prompt=context.judge_prompt,
-                            judge_temperature=context.judge_temperature,
-                            judge_max_tokens=context.judge_max_tokens,
-                            judge_retries=context.judge_retries,
-                        )
-                        status = _evaluation_status(trace.result)
+                        trace = evaluate_answers(pair.question, target_run.answer, reference_run.answer, context.judge)
+                        status = _evaluation_status(trace)
                     else:
                         trace = EvaluationTrace(result=_incomplete_target_evaluation(target_run))
                         status = ResultStatus.TARGET_INCOMPLETE
@@ -386,7 +359,9 @@ def _run_sequential_pairs(context: RunContext, scenario: Scenario, temperature: 
 @click.option("--judge-max-tokens", default=DEFAULT_JUDGE_MAX_TOKENS, show_default=True, type=int,
               help="Max tokens for the judge response. Reasoning models spend part of it before the JSON verdict.")
 @click.option("--judge-retries", default=DEFAULT_JUDGE_RETRIES, show_default=True, type=click.IntRange(min=0),
-              help="Extra judge calls when a response carries no score (empty, truncated or not JSON).")
+              help="Extra judge calls when a response carries no valid verdict (empty, truncated, not JSON or "
+                   "wrong schema). A valid verdict, including FAIL, is never retried; when all attempts fail the "
+                   "case is JUDGE_ERROR.")
 @click.option("--reference-retries", default=DEFAULT_REFERENCE_RETRIES, show_default=True,
               type=click.IntRange(min=0),
               help="Extra reference generations, each under a fresh cache-busting prefix, when the reference "
@@ -410,8 +385,9 @@ def _run_sequential_pairs(context: RunContext, scenario: Scenario, temperature: 
               help="Append full run traces (JSON Lines) to this file for later review with kvcache-logs.")
 @click.option("--accuracy-csv", default=None, type=click.Path(), metavar="PATH",
               help="Write a CloudAI-compatible accuracy CSV (Task,Correct,Total,Accuracy,Invalid,"
-                   "ReferenceIncomplete,TargetIncomplete with an OVERALL row) to PATH. Per-scenario pass/fail is "
-                   "aggregated into a 0.0-1.0 fraction; Invalid and TargetIncomplete iterations count in Total. "
+                   "ReferenceIncomplete,TargetIncomplete,JudgeError with an OVERALL row) to PATH. Per-scenario "
+                   "pass/fail is aggregated into a 0.0-1.0 fraction; Invalid and TargetIncomplete iterations count "
+                   "in Total. "
                    "The file is written regardless of the exit code.")
 @click.option("--verbose", "-v", is_flag=True,
               help="Print target and reference answers for every test, not just failures.")
@@ -440,13 +416,22 @@ def cli(
     target_base = target_url.rstrip("/")
     target_client = OpenAI(base_url=f"{target_base}/v1", api_key=api_key)
 
-    judge_client = None
+    judge_client = target_client
+
     if judge_url:
         judge_client = OpenAI(base_url=f"{judge_url.rstrip('/')}/v1", api_key=judge_api_key)
-    judge_model_name = judge_model or model
+
+    judge = JudgeConfig(
+        client=judge_client,
+        model=judge_model or model,
+        prompt=judge_prompt,
+        temperature=judge_temperature,
+        max_tokens=judge_max_tokens,
+        retries=judge_retries,
+        threshold=threshold,
+    )
 
     run_logger = RunLogger(Path(log_file)) if log_file else None
-
 
     console.print("[bold]KV Cache Sanity Check[/]")
     console.print(f"Target : {target_base}  model={model}")
@@ -463,13 +448,7 @@ def cli(
         documents=documents,
         target_client=target_client,
         model=model,
-        judge_client=judge_client,
-        judge_model_name=judge_model_name,
-        judge_prompt=judge_prompt,
-        judge_temperature=judge_temperature,
-        judge_max_tokens=judge_max_tokens,
-        judge_retries=judge_retries,
-        threshold=threshold,
+        judge=judge,
         max_tokens=max_tokens,
         iterations=iterations,
         reference_retries=reference_retries,

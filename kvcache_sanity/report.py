@@ -1,4 +1,5 @@
 import csv
+from collections import Counter
 from pathlib import Path
 
 from rich.console import Console
@@ -23,6 +24,8 @@ def print_result(result: TestResult, verbose: bool = False) -> None:
 
     if result.status == ResultStatus.TARGET_INCOMPLETE:
         status = "[bold red]TARGET_INCOMPLETE[/]"
+    elif result.status == ResultStatus.JUDGE_ERROR:
+        status = "[bold yellow]JUDGE_ERROR[/]"
     else:
         status = "[bold green]PASS[/]" if result.evaluation.passed else "[bold red]FAIL[/]"
     score_pct = f"{result.evaluation.score * 100:.0f}%"
@@ -59,10 +62,28 @@ def print_summary(results: list[TestResult]) -> None:
     ))
 
 
+_CSV_HEADER = [
+    "Task", "Correct", "Total", "Accuracy", "Invalid", "ReferenceIncomplete", "TargetIncomplete", "JudgeError",
+]
+
+
+def _csv_row(task: str, results: list[TestResult]) -> list:
+    statuses = Counter(result.status for result in results)
+    correct = sum(1 for result in results if result.evaluation.passed)
+    total = len(results)
+    accuracy = correct / total if total else 0.0
+    reference_incomplete = statuses[ResultStatus.REFERENCE_INCOMPLETE]
+    judge_error = statuses[ResultStatus.JUDGE_ERROR]
+    return [
+        task, correct, total, f"{accuracy:.4f}",
+        reference_incomplete + judge_error, reference_incomplete, statuses[ResultStatus.TARGET_INCOMPLETE], judge_error,
+    ]
+
+
 def write_accuracy_csv(results: list[TestResult], path: Path) -> None:
     """Write results as a CloudAI-compatible accuracy CSV.
 
-    Columns are ``Task,Correct,Total,Accuracy,Invalid,ReferenceIncomplete,TargetIncomplete``
+    Columns are ``Task,Correct,Total,Accuracy,Invalid,ReferenceIncomplete,TargetIncomplete,JudgeError``
     with one row per scenario (Correct = passed iterations, Accuracy = Correct/Total as a
     0.0-1.0 fraction) plus a final OVERALL row aggregating every iteration. CloudAI's
     AIDynamo report strategy reads the Accuracy of the OVERALL row by column name, so the
@@ -70,27 +91,17 @@ def write_accuracy_csv(results: list[TestResult], path: Path) -> None:
     wrapped with ``|| true``).
 
     Invalid counts iterations that say nothing about the cache path; ReferenceIncomplete
-    is its breakdown. Invalid iterations are still part of Total and lower Accuracy, so
-    consumers that ignore the extra columns keep seeing them as failures.
+    and JudgeError are its breakdown. Invalid iterations are still part of Total and lower
+    Accuracy, so consumers that ignore the extra columns keep seeing them as failures.
 
     TargetIncomplete counts truncated or empty target answers. They are incorrect answers,
     not invalid ones: part of Total, never of Correct or Invalid.
     """
-    # scenario_id -> [correct, total, reference_incomplete, target_incomplete], insertion-ordered
-    # so the CSV mirrors run order.
-    per_scenario: dict[str, list[int]] = {}
+    # Insertion-ordered so the CSV mirrors run order.
+    per_scenario: dict[str, list[TestResult]] = {}
 
     for result in results:
-        bucket = per_scenario.setdefault(result.scenario_id, [0, 0, 0, 0])
-        bucket[1] += 1
-        if result.evaluation.passed:
-            bucket[0] += 1
-        if result.status == ResultStatus.REFERENCE_INCOMPLETE:
-            bucket[2] += 1
-        if result.status == ResultStatus.TARGET_INCOMPLETE:
-            bucket[3] += 1
-
-    overall_bucket = [sum(column) for column in zip(*per_scenario.values())] or [0, 0, 0, 0]
+        per_scenario.setdefault(result.scenario_id, []).append(result)
 
     path = Path(path)
     if path.parent != Path(""):
@@ -98,11 +109,9 @@ def write_accuracy_csv(results: list[TestResult], path: Path) -> None:
 
     with path.open("w", newline="", encoding="utf-8") as csv_file:
         writer = csv.writer(csv_file)
-        writer.writerow(["Task", "Correct", "Total", "Accuracy", "Invalid", "ReferenceIncomplete", "TargetIncomplete"])
+        writer.writerow(_CSV_HEADER)
 
-        rows = [*per_scenario.items(), ("OVERALL", overall_bucket)]
-        for task, (correct, count, reference_incomplete, target_incomplete) in rows:
-            accuracy = correct / count if count else 0.0
-            writer.writerow([
-                task, correct, count, f"{accuracy:.4f}", reference_incomplete, reference_incomplete, target_incomplete,
-            ])
+        for scenario_id, scenario_results in per_scenario.items():
+            writer.writerow(_csv_row(scenario_id, scenario_results))
+
+        writer.writerow(_csv_row("OVERALL", results))
