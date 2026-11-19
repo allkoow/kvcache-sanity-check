@@ -89,7 +89,13 @@ def make_client(base_url: str, api_key: str, timeout: float = DEFAULT_REQUEST_TI
     The SDK default retries connection errors, timeouts, 408/409/429 and 5xx twice, which hides
     exactly the failures a KV cache storage reconfiguration or recovery is expected to cause.
     """
-    return OpenAI(base_url=f"{base_url.rstrip('/')}/v1", api_key=api_key, max_retries=0, timeout=timeout)
+
+    return OpenAI(
+        base_url=f"{base_url.rstrip('/')}/v1",
+        api_key=api_key,
+        max_retries=0,
+        timeout=timeout,
+    )
 
 
 def _call_api(
@@ -110,11 +116,13 @@ def _call_api(
     A request that fails (connection error, timeout, HTTP error status) is not retried: the
     returned run carries the error and no answer.
     """
+
     tag = escape(f" [{label}]") if label else ""
     run = RunResult(answer="", messages=messages)
 
     for attempt in range(empty_retries + 1):
         started_at = utc_now()
+
         try:
             response = client.chat.completions.create(
                 model=model,
@@ -125,9 +133,14 @@ def _call_api(
         except API_ERRORS as exc:
             error = f"{type(exc).__name__}: {exc}"
             _stderr.print(f"[red]ERROR[/red]: request failed{tag}: {escape(error)}")
+
             return RunResult(
-                answer="", messages=messages, started_at=started_at, finished_at=utc_now(),
-                error=error, timed_out=isinstance(exc, openai.APITimeoutError),
+                answer="",
+                messages=messages,
+                started_at=started_at,
+                finished_at=utc_now(),
+                error=error,
+                timed_out=isinstance(exc, openai.APITimeoutError),
             )
 
         finished_at = utc_now()
@@ -189,10 +202,13 @@ def inject_prefix(messages: list[dict], prefix: str | None) -> list[dict]:
     The prefix changes the first tokens of the conversation, so a KV cache keyed on the
     token prefix cannot serve any block of it from an earlier run under another prefix.
     """
+
     copied = [dict(message) for message in messages]
+
     if prefix:
         system = next(message for message in copied if message["role"] == "system")
         system["content"] = f"[{prefix}] " + system["content"]
+
     return copied
 
 

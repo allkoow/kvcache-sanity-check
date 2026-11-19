@@ -64,6 +64,7 @@ def print_summary(results: list[TestResult]) -> None:
 
 def run_failed(results: list[TestResult]) -> bool:
     """A run with no evaluated case proves nothing, so it fails like a run with a failing case."""
+
     return not results or not all(result.evaluation.passed for result in results)
 
 

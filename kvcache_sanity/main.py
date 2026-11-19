@@ -113,7 +113,9 @@ class RunContext:
 
     def record(self, result: TestResult) -> None:
         """Keep a finished result; the CSV is rewritten so an interrupted run still leaves one."""
+
         self.all_results.append(result)
+
         if self.accuracy_csv:
             report.write_accuracy_csv(self.all_results, self.accuracy_csv)
 
@@ -382,9 +384,14 @@ def _run_sequential_pairs(context: RunContext, scenario: Scenario, temperature: 
 @click.option("--judge-structured/--no-judge-structured", default=True, show_default=True,
               help="Constrain the judge response to a JSON schema (OpenAI 'response_format', guided "
                    "decoding on vLLM). Use --no-judge-structured for servers that reject it.")
-@click.option("--request-timeout", default=DEFAULT_REQUEST_TIMEOUT, show_default=True, type=float,
-              help="Seconds a single request may take. Requests are never retried by the HTTP client, so a "
-                   "failed request is reported as ERROR or TIMEOUT.")
+@click.option(
+    "--request-timeout",
+    default=DEFAULT_REQUEST_TIMEOUT,
+    show_default=True,
+    type=float,
+    help="Seconds a single request may take. Requests are never retried by the HTTP client, "
+         "so a failed request is reported as ERROR or TIMEOUT.",
+)
 @click.option("--reference-retries", default=DEFAULT_REFERENCE_RETRIES, show_default=True,
               type=click.IntRange(min=0),
               help="Extra reference generations, each under a fresh cache-busting prefix, when the reference "
@@ -501,6 +508,7 @@ def cli(
     # CloudAI and Slurm stop a job with SIGTERM; handled like Ctrl+C so finished results are kept.
     previous_sigterm = signal.signal(signal.SIGTERM, _raise_interrupt)
     interrupted = False
+
     try:
         for scenario in scenarios:
             console.print(f"[bold cyan]{scenario.id}[/] — {scenario.description}")
@@ -515,7 +523,9 @@ def cli(
             console.print()
     except KeyboardInterrupt:
         interrupted = True
-        console.print(f"\n[bold yellow]Interrupted[/] after {len(all_results)} result(s); the run counts as failed.")
+        console.print(
+            f"\n[bold yellow]Interrupted[/] after {len(all_results)} result(s); the run counts as failed."
+        )
     finally:
         signal.signal(signal.SIGTERM, previous_sigterm)
 

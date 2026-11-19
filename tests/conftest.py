@@ -24,6 +24,7 @@ def make_response(content: str, finish_reason: str = "stop", request_id: str = "
     message = SimpleNamespace(content=content, reasoning_content=None)
     choice = SimpleNamespace(message=message, finish_reason=finish_reason)
     usage = SimpleNamespace(completion_tokens=len(content.split()), completion_tokens_details=None)
+
     return SimpleNamespace(id=request_id, choices=[choice], usage=usage)
 
 
@@ -38,6 +39,7 @@ class FakeCompletions:
 
     def create(self, **kwargs) -> SimpleNamespace:
         self.calls.append(kwargs)
+
         return self.responder(kwargs)
 
 
@@ -76,20 +78,28 @@ class CliRun:
 
 def run_cli(tmp_path: Path, monkeypatch, responder: Callable[[dict], SimpleNamespace], *args: str) -> CliRun:
     """Run kvcache-check on a one-scenario file with every request answered by `responder`."""
+
     from kvcache_sanity import main
 
     scenarios_file = tmp_path / "scenarios.yaml"
     scenarios_file.write_text(SCENARIO_YAML)
     accuracy_csv = tmp_path / "accuracy_results.csv"
     log_file = tmp_path / "runs.jsonl"
+
     client = FakeClient(responder)
     monkeypatch.setattr(main, "make_client", lambda *_args, **_kwargs: client)
 
-    outcome = CliRunner().invoke(main.cli, [
-        "--target-url", "http://server", "--model", "model", "--scenarios-file", str(scenarios_file),
-        "--accuracy-csv", str(accuracy_csv), "--log-file", str(log_file), *args,
-    ])
+    cli_args = [
+        "--target-url", "http://server",
+        "--model", "model",
+        "--scenarios-file", str(scenarios_file),
+        "--accuracy-csv", str(accuracy_csv),
+        "--log-file", str(log_file),
+        *args,
+    ]
+    outcome = CliRunner().invoke(main.cli, cli_args)
 
     csv_rows = list(csv.DictReader(accuracy_csv.open())) if accuracy_csv.exists() else []
     logs = [json.loads(line) for line in log_file.read_text().splitlines()] if log_file.exists() else []
+
     return CliRun(outcome.exit_code, outcome.output, csv_rows, logs, client)

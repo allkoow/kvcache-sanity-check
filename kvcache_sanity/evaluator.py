@@ -223,9 +223,9 @@ def evaluate_answers(
     A judge response without a valid verdict (empty, truncated, not JSON, wrong schema),
     or a judge request that failed outright, says nothing about the target answer, so the
     call is repeated up to judge.retries times. A valid verdict, PASS or FAIL, is never
-    retried. Every attempt gets a fresh
-    prefix, which also changes the generation at temperature 0. When no attempt yields
-    a valid verdict the trace carries judge_error and a non-passing result.
+    retried. Every attempt gets a fresh prefix, which also changes the generation at
+    temperature 0. When no attempt yields a valid verdict the trace carries judge_error
+    and a non-passing result.
 
     Returns an EvaluationTrace that bundles the EvaluationResult with the full
     judge message exchange, the raw response and every attempt for logging.
@@ -277,6 +277,7 @@ def evaluate_answers(
             finish_reason = choice.finish_reason or ""
             completion_tokens = response.usage.completion_tokens if response.usage else 0
             request_id = response.id or ""
+
             try:
                 result = _parse_judge_response(raw, judge.threshold)
             except ValueError as exc:

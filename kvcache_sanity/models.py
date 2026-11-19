@@ -201,3 +201,43 @@ class ReferenceSet(BaseModel):
     temperature: float
     max_tokens: int
     records: list[ReferenceRecord]
+
+
+class PrefixMode(str, Enum):
+    """Which cache-busting prefix a replay sends each case under."""
+
+    # The reference prefix: reads the blocks the reference phase stored.
+    REUSE = "reuse"
+    # A new prefix per case, shared by every iteration of the replay: the first request writes, the rest read.
+    FRESH = "fresh"
+    # The prefix an earlier replay used, e.g. to read after a reconfiguration what was written before it.
+    FROM = "from"
+
+
+class ReplayAttempt(BaseModel):
+    """One replayed request: PASS when the generation is complete, else TARGET_INCOMPLETE, ERROR or TIMEOUT.
+
+    A case without a complete reference is not sent and carries the reference status instead.
+    """
+
+    case_id: str
+    seq: int
+    prefix: str
+    started_at: str = ""
+    finished_at: str = ""
+    status: ResultStatus
+    answer: str = ""
+    finish_reason: str = ""
+    completion_tokens: int = 0
+    request_id: str = ""
+    truncation: Optional[str] = None
+    error: Optional[str] = None
+
+
+class ReplayRun(BaseModel):
+    name: str
+    prefix_mode: PrefixMode
+    prefix_source: Optional[str] = None  # the earlier replay, set only for PrefixMode.FROM
+    started_at: str
+    finished_at: str
+    attempts: list[ReplayAttempt]

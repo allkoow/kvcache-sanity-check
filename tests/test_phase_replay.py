@@ -1,0 +1,181 @@
+from __future__ import annotations
+
+import time
+
+import httpx
+import openai
+
+from kvcache_sanity.cases import messages_sha256
+from kvcache_sanity.models import Case, PrefixMode, ReferenceRecord, ReferenceSet, ResultStatus
+from kvcache_sanity.phases import PhaseContext, run_replay_phase
+from kvcache_sanity.runner import inject_prefix
+from tests.conftest import FakeClient, make_request, make_response
+
+MESSAGES = [{"role": "system", "content": "sys"}, {"role": "user", "content": "q"}]
+
+
+def _record(case_id: str, status: ResultStatus = ResultStatus.PASS):
+    case = Case(
+        case_id=case_id,
+        scenario_id=case_id,
+        question="q",
+        messages=MESSAGES,
+        messages_sha256=messages_sha256(MESSAGES),
+    )
+
+    return ReferenceRecord(case=case, prefix=f"ref-{case_id}", answer="answer", status=status)
+
+
+def _reference_set(*records: ReferenceRecord) -> ReferenceSet:
+    return ReferenceSet(
+        created_at="now",
+        model="model",
+        temperature=0.1,
+        max_tokens=64,
+        records=list(records),
+    )
+
+
+def _context(client: FakeClient) -> PhaseContext:
+    return PhaseContext(
+        target_client=client,
+        model="model",
+        max_tokens=64,
+        temperature=0.1,
+        reference_retries=2,
+    )
+
+
+def _prefix_of(call: dict) -> str:
+    return call["messages"][0]["content"].split("]", 1)[0].lstrip("[")
+
+
+def _answer(kwargs: dict):
+    return make_response("answer")
+
+
+def _raise_server_error():
+    response = httpx.Response(500, request=make_request())
+
+    raise openai.InternalServerError("boom", response=response, body=None)
+
+
+def test_reuse_sends_every_iteration_under_the_reference_prefix():
+    client = FakeClient(_answer)
+    reference_set = _reference_set(_record("early"))
+
+    replay = run_replay_phase(_context(client), reference_set, "warm", PrefixMode.REUSE, iterations=3)
+
+    assert len(client.calls) == 3
+    assert [attempt.seq for attempt in replay.attempts] == [1, 2, 3]
+    assert {attempt.prefix for attempt in replay.attempts} == {"ref-early"}
+    assert all(attempt.status == ResultStatus.PASS for attempt in replay.attempts)
+    assert all(call["messages"] == inject_prefix(MESSAGES, "ref-early") for call in client.calls)
+    assert replay.name == "warm"
+    assert replay.prefix_mode == PrefixMode.REUSE
+    assert replay.prefix_source is None
+    assert replay.started_at <= replay.finished_at
+
+
+def test_fresh_uses_one_new_prefix_per_case_for_all_iterations():
+    client = FakeClient(_answer)
+    reference_set = _reference_set(_record("early"), _record("late"))
+
+    replay = run_replay_phase(_context(client), reference_set, "cold", PrefixMode.FRESH, iterations=2)
+
+    prefixes = {
+        case_id: {attempt.prefix for attempt in replay.attempts if attempt.case_id == case_id}
+        for case_id in ("early", "late")
+    }
+    sent = sorted(_prefix_of(call) for call in client.calls)
+
+    assert all(len(case_prefixes) == 1 for case_prefixes in prefixes.values())
+    assert prefixes["early"] != prefixes["late"]
+    assert prefixes["early"] != {"ref-early"}
+    assert sent == sorted(attempt.prefix for attempt in replay.attempts)
+
+
+def test_from_reuses_the_prefix_of_an_earlier_replay():
+    client = FakeClient(_answer)
+    reference_set = _reference_set(_record("early"))
+
+    cold = run_replay_phase(_context(client), reference_set, "cold", PrefixMode.FRESH, iterations=1)
+    again = run_replay_phase(
+        _context(client),
+        reference_set,
+        "again",
+        PrefixMode.FROM,
+        iterations=1,
+        source=cold,
+    )
+
+    assert again.attempts[0].prefix == cold.attempts[0].prefix
+    assert again.attempts[0].prefix != "ref-early"
+    assert again.prefix_source == "cold"
+
+
+def test_failed_iteration_does_not_stop_the_others():
+    calls = {"count": 0}
+
+    def responder(kwargs):
+        calls["count"] += 1
+        if calls["count"] == 2:
+            _raise_server_error()
+
+        return make_response("answer")
+
+    reference_set = _reference_set(_record("early"))
+
+    replay = run_replay_phase(_context(FakeClient(responder)), reference_set, "warm", PrefixMode.REUSE, iterations=3)
+
+    statuses = [attempt.status for attempt in replay.attempts]
+    failed = replay.attempts[1]
+
+    assert statuses == [ResultStatus.PASS, ResultStatus.ERROR, ResultStatus.PASS]
+    assert failed.error.startswith("InternalServerError")
+    assert failed.started_at and failed.finished_at
+
+
+def test_case_without_a_complete_reference_is_carried_not_sent():
+    client = FakeClient(_answer)
+    reference_set = _reference_set(_record("early", ResultStatus.TIMEOUT), _record("late"))
+
+    replay = run_replay_phase(_context(client), reference_set, "warm", PrefixMode.REUSE, iterations=3)
+
+    early = [(attempt.seq, attempt.status) for attempt in replay.attempts if attempt.case_id == "early"]
+
+    assert early == [(1, ResultStatus.TIMEOUT)]
+    assert len(client.calls) == 3
+
+
+def test_attempts_follow_reference_order_then_seq():
+    reference_set = _reference_set(_record("late"), _record("early"))
+
+    replay = run_replay_phase(_context(FakeClient(_answer)), reference_set, "warm", PrefixMode.REUSE, iterations=2)
+
+    order = [(attempt.case_id, attempt.seq) for attempt in replay.attempts]
+
+    assert order == [("late", 1), ("late", 2), ("early", 1), ("early", 2)]
+
+
+def test_duration_repeats_rounds_until_the_deadline():
+    def responder(kwargs):
+        time.sleep(0.03)
+
+        return make_response("answer")
+
+    reference_set = _reference_set(_record("early"))
+
+    replay = run_replay_phase(
+        _context(FakeClient(responder)),
+        reference_set,
+        "warm",
+        PrefixMode.REUSE,
+        iterations=0,
+        duration=0.2,
+    )
+
+    seqs = [attempt.seq for attempt in replay.attempts]
+
+    assert len(seqs) >= 2
+    assert seqs == list(range(1, len(seqs) + 1))
