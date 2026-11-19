@@ -4,8 +4,8 @@ import httpx
 import openai
 
 from kvcache_sanity.cases import messages_sha256
-from kvcache_sanity.models import Case, ResultStatus
-from kvcache_sanity.phases import PhaseContext, run_reference_phase
+from kvcache_sanity.models import Case, ReferenceSet, ResultStatus
+from kvcache_sanity.phases import PhaseContext, ReferencePhase, RunState
 from tests.conftest import FakeClient, make_request, make_response
 
 MESSAGES = [{"role": "system", "content": "sys"}, {"role": "user", "content": "q"}]
@@ -31,6 +31,14 @@ def _context(client: FakeClient) -> PhaseContext:
     )
 
 
+def _reference(client: FakeClient) -> ReferenceSet:
+    state = RunState(cases=[_case()])
+
+    ReferencePhase(_context(client)).run(state)
+
+    return state.require_reference_set()
+
+
 def _prefix_of(call: dict) -> str:
     return call["messages"][0]["content"].split("]", 1)[0].lstrip("[")
 
@@ -44,7 +52,7 @@ def _raise_server_error(kwargs: dict):
 def test_complete_reference_is_pass():
     client = FakeClient(lambda kwargs: make_response("answer"))
 
-    reference_set = run_reference_phase(_context(client), [_case()])
+    reference_set = _reference(client)
 
     (record,) = reference_set.records
 
@@ -62,7 +70,7 @@ def test_truncated_reference_is_retried_under_a_fresh_prefix():
     responses = iter([make_response("partial", finish_reason="length"), make_response("answer")])
     client = FakeClient(lambda kwargs: next(responses))
 
-    (record,) = run_reference_phase(_context(client), [_case()]).records
+    (record,) = _reference(client).records
 
     first, second = (_prefix_of(call) for call in client.calls)
 
@@ -76,7 +84,7 @@ def test_truncated_reference_is_retried_under_a_fresh_prefix():
 def test_failed_reference_is_kept_with_its_error():
     client = FakeClient(_raise_server_error)
 
-    (record,) = run_reference_phase(_context(client), [_case()]).records
+    (record,) = _reference(client).records
 
     assert record.status == ResultStatus.ERROR
     assert record.answer == ""

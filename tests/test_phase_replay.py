@@ -6,8 +6,8 @@ import httpx
 import openai
 
 from kvcache_sanity.cases import messages_sha256
-from kvcache_sanity.models import Case, PrefixMode, ReferenceRecord, ReferenceSet, ResultStatus
-from kvcache_sanity.phases import PhaseContext, run_replay_phase
+from kvcache_sanity.models import Case, PrefixMode, ReferenceRecord, ReferenceSet, ReplayRun, ResultStatus
+from kvcache_sanity.phases import PhaseContext, ReplayPhase, RunState
 from kvcache_sanity.runner import inject_prefix
 from tests.conftest import FakeClient, make_request, make_response
 
@@ -46,6 +46,20 @@ def _context(client: FakeClient) -> PhaseContext:
     )
 
 
+def _replay(
+    client: FakeClient,
+    reference_set: ReferenceSet,
+    name: str,
+    prefix_mode: PrefixMode,
+    **options,
+) -> ReplayRun:
+    state = RunState(cases=[], reference_set=reference_set)
+
+    ReplayPhase(_context(client), name, prefix_mode, **options).run(state)
+
+    return state.replays[name]
+
+
 def _prefix_of(call: dict) -> str:
     return call["messages"][0]["content"].split("]", 1)[0].lstrip("[")
 
@@ -64,7 +78,7 @@ def test_reuse_sends_every_iteration_under_the_reference_prefix():
     client = FakeClient(_answer)
     reference_set = _reference_set(_record("early"))
 
-    replay = run_replay_phase(_context(client), reference_set, "warm", PrefixMode.REUSE, iterations=3)
+    replay = _replay(client, reference_set, "warm", PrefixMode.REUSE, iterations=3)
 
     assert len(client.calls) == 3
     assert [attempt.seq for attempt in replay.attempts] == [1, 2, 3]
@@ -81,7 +95,7 @@ def test_fresh_uses_one_new_prefix_per_case_for_all_iterations():
     client = FakeClient(_answer)
     reference_set = _reference_set(_record("early"), _record("late"))
 
-    replay = run_replay_phase(_context(client), reference_set, "cold", PrefixMode.FRESH, iterations=2)
+    replay = _replay(client, reference_set, "cold", PrefixMode.FRESH, iterations=2)
 
     prefixes = {
         case_id: {attempt.prefix for attempt in replay.attempts if attempt.case_id == case_id}
@@ -96,18 +110,14 @@ def test_fresh_uses_one_new_prefix_per_case_for_all_iterations():
 
 
 def test_from_reuses_the_prefix_of_an_earlier_replay():
-    client = FakeClient(_answer)
-    reference_set = _reference_set(_record("early"))
+    context = _context(FakeClient(_answer))
+    state = RunState(cases=[], reference_set=_reference_set(_record("early")))
 
-    cold = run_replay_phase(_context(client), reference_set, "cold", PrefixMode.FRESH, iterations=1)
-    again = run_replay_phase(
-        _context(client),
-        reference_set,
-        "again",
-        PrefixMode.FROM,
-        iterations=1,
-        source=cold,
-    )
+    ReplayPhase(context, "cold", PrefixMode.FRESH, iterations=1).run(state)
+    ReplayPhase(context, "again", PrefixMode.FROM, iterations=1, source="cold").run(state)
+
+    cold = state.replays["cold"]
+    again = state.replays["again"]
 
     assert again.attempts[0].prefix == cold.attempts[0].prefix
     assert again.attempts[0].prefix != "ref-early"
@@ -126,7 +136,7 @@ def test_failed_iteration_does_not_stop_the_others():
 
     reference_set = _reference_set(_record("early"))
 
-    replay = run_replay_phase(_context(FakeClient(responder)), reference_set, "warm", PrefixMode.REUSE, iterations=3)
+    replay = _replay(FakeClient(responder), reference_set, "warm", PrefixMode.REUSE, iterations=3)
 
     statuses = [attempt.status for attempt in replay.attempts]
     failed = replay.attempts[1]
@@ -140,7 +150,7 @@ def test_case_without_a_complete_reference_is_carried_not_sent():
     client = FakeClient(_answer)
     reference_set = _reference_set(_record("early", ResultStatus.TIMEOUT), _record("late"))
 
-    replay = run_replay_phase(_context(client), reference_set, "warm", PrefixMode.REUSE, iterations=3)
+    replay = _replay(client, reference_set, "warm", PrefixMode.REUSE, iterations=3)
 
     early = [(attempt.seq, attempt.status) for attempt in replay.attempts if attempt.case_id == "early"]
 
@@ -151,7 +161,7 @@ def test_case_without_a_complete_reference_is_carried_not_sent():
 def test_attempts_follow_reference_order_then_seq():
     reference_set = _reference_set(_record("late"), _record("early"))
 
-    replay = run_replay_phase(_context(FakeClient(_answer)), reference_set, "warm", PrefixMode.REUSE, iterations=2)
+    replay = _replay(FakeClient(_answer), reference_set, "warm", PrefixMode.REUSE, iterations=2)
 
     order = [(attempt.case_id, attempt.seq) for attempt in replay.attempts]
 
@@ -166,8 +176,8 @@ def test_duration_repeats_rounds_until_the_deadline():
 
     reference_set = _reference_set(_record("early"))
 
-    replay = run_replay_phase(
-        _context(FakeClient(responder)),
+    replay = _replay(
+        FakeClient(responder),
         reference_set,
         "warm",
         PrefixMode.REUSE,
