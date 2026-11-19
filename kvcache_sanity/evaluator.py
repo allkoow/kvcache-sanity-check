@@ -5,6 +5,7 @@ from openai import OpenAI
 from rich.console import Console as _Console
 from rich.markup import escape
 from kvcache_sanity.models import EvaluationResult, EvaluationTrace, JudgeAttemptLog
+from kvcache_sanity.runner import API_ERRORS
 
 _stderr = _Console(stderr=True)
 
@@ -219,9 +220,10 @@ def evaluate_answers(
     With judge.structured the response is constrained to the prompt's JSON schema, so
     malformed output can only come from truncation; the checks below stay as a safety net.
 
-    A judge response without a valid verdict (empty, truncated, not JSON, wrong schema)
-    says nothing about the target answer, so the call is repeated up to judge.retries
-    times. A valid verdict, PASS or FAIL, is never retried. Every attempt gets a fresh
+    A judge response without a valid verdict (empty, truncated, not JSON, wrong schema),
+    or a judge request that failed outright, says nothing about the target answer, so the
+    call is repeated up to judge.retries times. A valid verdict, PASS or FAIL, is never
+    retried. Every attempt gets a fresh
     prefix, which also changes the generation at temperature 0. When no attempt yields
     a valid verdict the trace carries judge_error and a non-passing result.
 
@@ -253,28 +255,39 @@ def evaluate_answers(
         response_format = judge.response_format()
         if response_format is not None:
             request_kwargs["response_format"] = response_format
-        response = judge.client.chat.completions.create(
-            model=judge.model,
-            messages=messages,
-            max_tokens=judge.max_tokens,
-            temperature=judge.temperature,
-            **request_kwargs,
-        )
-        choice = response.choices[0]
-        raw = (choice.message.content or "").strip()
-
+        raw = ""
+        finish_reason = ""
+        completion_tokens = 0
+        request_id = ""
         problem: str | None = None
+
         try:
-            result = _parse_judge_response(raw, judge.threshold)
-        except ValueError as exc:
-            problem = str(exc)
+            response = judge.client.chat.completions.create(
+                model=judge.model,
+                messages=messages,
+                max_tokens=judge.max_tokens,
+                temperature=judge.temperature,
+                **request_kwargs,
+            )
+        except API_ERRORS as exc:
+            problem = f"request failed: {type(exc).__name__}: {exc}"
+        else:
+            choice = response.choices[0]
+            raw = (choice.message.content or "").strip()
+            finish_reason = choice.finish_reason or ""
+            completion_tokens = response.usage.completion_tokens if response.usage else 0
+            request_id = response.id or ""
+            try:
+                result = _parse_judge_response(raw, judge.threshold)
+            except ValueError as exc:
+                problem = str(exc)
 
         attempt_logs.append(JudgeAttemptLog(
             prefix=eval_prefix,
             raw_response=raw,
-            finish_reason=choice.finish_reason or "",
-            completion_tokens=response.usage.completion_tokens if response.usage else 0,
-            request_id=response.id or "",
+            finish_reason=finish_reason,
+            completion_tokens=completion_tokens,
+            request_id=request_id,
             problem=problem,
         ))
         if problem is None:
@@ -283,7 +296,7 @@ def evaluate_answers(
         outcome = "Retrying…" if attempt < max_attempts else "Giving up."
         _stderr.print(
             f"[yellow]WARNING[/yellow]: no valid judge verdict on attempt {attempt}/{max_attempts}: "
-            f"{escape(problem)} (finish_reason={choice.finish_reason!r}, request_id={response.id}). {outcome}"
+            f"{escape(problem)} (finish_reason={finish_reason!r}, request_id={request_id}). {outcome}"
         )
 
     judge_error = attempt_logs[-1].problem

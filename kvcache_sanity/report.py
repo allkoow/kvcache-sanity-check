@@ -13,7 +13,7 @@ console = Console()
 
 def print_result(result: TestResult, verbose: bool = False) -> None:
     if result.error:
-        console.print(f"  iter {result.iteration}: [bold red]ERROR[/] — {result.error}")
+        console.print(f"  iter {result.iteration}: [bold red]{result.status.value}[/] — {escape(result.error)}")
         return
 
     if result.status == ResultStatus.REFERENCE_INCOMPLETE:

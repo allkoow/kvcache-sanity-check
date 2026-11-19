@@ -32,10 +32,12 @@ from kvcache_sanity.models import (
 )
 from kvcache_sanity.runner import (
     DEFAULT_REFERENCE_RETRIES,
+    DEFAULT_REQUEST_TIMEOUT,
     describe_generation,
     get_reference_answer,
     get_reference_pair_answer,
     is_complete,
+    make_client,
     prepare_reference,
     run_scenario,
     run_sequential_pair,
@@ -169,6 +171,10 @@ def _incomplete_target_evaluation(target_run: RunResult) -> EvaluationResult:
     return EvaluationResult(score=0.0, reasoning=reasoning, passed=False)
 
 
+def _failed_request_status(target_run: RunResult) -> ResultStatus:
+    return ResultStatus.TIMEOUT if target_run.timed_out else ResultStatus.ERROR
+
+
 def _incomplete_reference_evaluation(attempts: list[RunResult]) -> EvaluationResult:
     reasoning = f"[reference incomplete after {len(attempts)} attempt(s)] {describe_generation(attempts[-1])}"
     return EvaluationResult(score=0.0, reasoning=reasoning, passed=False)
@@ -210,7 +216,11 @@ def _run_scenario_iterations(context: RunContext, scenario: Scenario, temperatur
                     unique_prefix=reference_run.unique_prefix, max_tokens=context.max_tokens,
                     temperature=temperature, empty_retries=0,
                 )
-                if is_complete(target_run):
+                if target_run.error:
+                    error = target_run.error
+                    trace = EvaluationTrace(result=EvaluationResult(score=0.0, reasoning=error, passed=False))
+                    status = _failed_request_status(target_run)
+                elif is_complete(target_run):
                     trace = evaluate_answers(scenario.question, target_run.answer, reference_run.answer, context.judge)
                     status = _evaluation_status(trace)
                 else:
@@ -221,6 +231,7 @@ def _run_scenario_iterations(context: RunContext, scenario: Scenario, temperatur
                     target_answer=target_run.answer, reference_answer=reference_run.answer,
                     evaluation=trace.result,
                     status=status,
+                    error=target_run.error,
                     target_request_id=target_run.request_id,
                     target_truncation=target_run.truncation,
                 )
@@ -287,7 +298,11 @@ def _run_sequential_pairs(context: RunContext, scenario: Scenario, temperature: 
                         unique_prefix=reference_run.unique_prefix, max_tokens=context.max_tokens,
                         temperature=temperature, empty_retries=0,
                     )
-                    if is_complete(target_run):
+                    if target_run.error:
+                        error = target_run.error
+                        trace = EvaluationTrace(result=EvaluationResult(score=0.0, reasoning=error, passed=False))
+                        status = _failed_request_status(target_run)
+                    elif is_complete(target_run):
                         trace = evaluate_answers(pair.question, target_run.answer, reference_run.answer, context.judge)
                         status = _evaluation_status(trace)
                     else:
@@ -299,6 +314,7 @@ def _run_sequential_pairs(context: RunContext, scenario: Scenario, temperature: 
                         target_answer=target_run.answer, reference_answer=reference_run.answer,
                         evaluation=trace.result,
                         status=status,
+                        error=target_run.error,
                         target_request_id=target_run.request_id,
                         target_truncation=target_run.truncation,
                     )
@@ -354,6 +370,9 @@ def _run_sequential_pairs(context: RunContext, scenario: Scenario, temperature: 
 @click.option("--judge-structured/--no-judge-structured", default=True, show_default=True,
               help="Constrain the judge response to a JSON schema (OpenAI 'response_format', guided "
                    "decoding on vLLM). Use --no-judge-structured for servers that reject it.")
+@click.option("--request-timeout", default=DEFAULT_REQUEST_TIMEOUT, show_default=True, type=float,
+              help="Seconds a single request may take. Requests are never retried by the HTTP client, so a "
+                   "failed request is reported as ERROR or TIMEOUT.")
 @click.option("--reference-retries", default=DEFAULT_REFERENCE_RETRIES, show_default=True,
               type=click.IntRange(min=0),
               help="Extra reference generations, each under a fresh cache-busting prefix, when the reference "
@@ -395,8 +414,8 @@ def _run_sequential_pairs(context: RunContext, scenario: Scenario, temperature: 
 def cli(
     target_url, model, api_key,
     judge_url, judge_model, judge_api_key,
-    temperature, judge_temperature, judge_max_tokens, judge_retries, judge_structured, reference_retries,
-    iterations, threshold, scenarios_name, scenarios_file, corpus_dir,
+    temperature, judge_temperature, judge_max_tokens, judge_retries, judge_structured, request_timeout,
+    reference_retries, iterations, threshold, scenarios_name, scenarios_file, corpus_dir,
     max_tokens, judge_prompt, log_file, accuracy_csv, verbose,
 ):
     """Sanity-check LLM output correctness when using offloaded KV cache.
@@ -422,12 +441,12 @@ def cli(
 
     # Normalise base URLs — strip trailing slash
     target_base = target_url.rstrip("/")
-    target_client = OpenAI(base_url=f"{target_base}/v1", api_key=api_key)
+    target_client = make_client(target_base, api_key, request_timeout)
 
     judge_client = target_client
 
     if judge_url:
-        judge_client = OpenAI(base_url=f"{judge_url.rstrip('/')}/v1", api_key=judge_api_key)
+        judge_client = make_client(judge_url, judge_api_key, request_timeout)
 
     judge = JudgeConfig(
         client=judge_client,

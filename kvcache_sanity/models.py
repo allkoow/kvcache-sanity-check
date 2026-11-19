@@ -8,6 +8,8 @@ class ResultStatus(str, Enum):
     PASS = "PASS"
     FAIL = "FAIL"
     ERROR = "ERROR"
+    # The request got no response within --request-timeout.
+    TIMEOUT = "TIMEOUT"
     # No complete reference after all attempts: the case says nothing about the cache path.
     REFERENCE_INCOMPLETE = "REFERENCE_INCOMPLETE"
     # Truncated or empty target next to a complete reference: counted as an incorrect answer.
@@ -77,6 +79,10 @@ class RunResult:
     completion_tokens: int = 0
     request_id: str = ""
     request_time: str = ""
+    started_at: str = ""   # ISO-8601 UTC, just before the request was sent
+    finished_at: str = ""  # ISO-8601 UTC, once the response or the error came back
+    error: Optional[str] = None  # set when the request failed instead of returning a response
+    timed_out: bool = False
     reasoning_tokens: Optional[int] = None  # only when the server reports it
     # Set only for finish_reason == "length": "loop" when the output tail repeats itself, else "budget".
     truncation: Optional[str] = None

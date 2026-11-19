@@ -16,6 +16,9 @@ dependencies = [
     "textual>=0.55",
 ]
 
+[dependency-groups]
+dev = ["pytest>=8"]
+
 [project.scripts]
 kvcache-check = "kvcache_sanity.main:cli"
 kvcache-logs = "kvcache_sanity.tui:tui"

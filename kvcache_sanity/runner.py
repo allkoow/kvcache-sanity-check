@@ -2,6 +2,7 @@ import re
 import uuid
 from collections.abc import Callable
 from datetime import datetime, timezone
+import openai
 from openai import OpenAI
 from rich.console import Console as _Console
 from rich.markup import escape
@@ -10,6 +11,10 @@ from kvcache_sanity.models import Scenario, ScenarioPair, Document, RunResult
 _stderr = _Console(stderr=True)
 _MAX_EMPTY_RETRIES = 3
 DEFAULT_REFERENCE_RETRIES = 2
+DEFAULT_REQUEST_TIMEOUT = 600.0
+
+# Failures the HTTP client reports instead of a response; APITimeoutError is an APIConnectionError.
+API_ERRORS = (openai.APIConnectionError, openai.APIStatusError)
 
 # Loop detection looks at the tail of a truncated output: in a degenerate loop most
 # fixed-length substrings of the tail occur more than once, in normal prose almost none do.
@@ -68,7 +73,23 @@ def describe_generation(run: RunResult) -> str:
     parts.append(f"answer_chars={len(run.answer.strip())}")
     parts.append(f"request_id={run.request_id}")
 
+    if run.error:
+        parts.append(f"error={run.error}")
+
     return ", ".join(parts)
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def make_client(base_url: str, api_key: str, timeout: float = DEFAULT_REQUEST_TIMEOUT) -> OpenAI:
+    """OpenAI client that reports every failed attempt instead of retrying it.
+
+    The SDK default retries connection errors, timeouts, 408/409/429 and 5xx twice, which hides
+    exactly the failures a KV cache storage reconfiguration or recovery is expected to cause.
+    """
+    return OpenAI(base_url=f"{base_url.rstrip('/')}/v1", api_key=api_key, max_retries=0, timeout=timeout)
 
 
 def _call_api(
@@ -82,19 +103,34 @@ def _call_api(
 ) -> RunResult:
     """Call the chat completions API, retrying on empty answers and warning on truncation.
 
-    request_time is an ISO-8601 UTC timestamp captured immediately after the response
-    is received — useful for correlating with server-side logs.
+    started_at and finished_at are ISO-8601 UTC timestamps taken around the request, for
+    correlating it with server-side logs and with faults injected meanwhile; request_time
+    equals finished_at and is kept for older log readers.
+
+    A request that fails (connection error, timeout, HTTP error status) is not retried: the
+    returned run carries the error and no answer.
     """
     tag = escape(f" [{label}]") if label else ""
     run = RunResult(answer="", messages=messages)
 
     for attempt in range(empty_retries + 1):
-        response = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
+        started_at = _now()
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+        except API_ERRORS as exc:
+            error = f"{type(exc).__name__}: {exc}"
+            _stderr.print(f"[red]ERROR[/red]: request failed{tag}: {escape(error)}")
+            return RunResult(
+                answer="", messages=messages, started_at=started_at, finished_at=_now(),
+                error=error, timed_out=isinstance(exc, openai.APITimeoutError),
+            )
+
+        finished_at = _now()
         choice = response.choices[0]
         usage = response.usage
         details = getattr(usage, "completion_tokens_details", None) if usage else None
@@ -106,7 +142,9 @@ def _call_api(
             finish_reason=choice.finish_reason or "",
             completion_tokens=usage.completion_tokens if usage else 0,
             request_id=response.id or "",
-            request_time=datetime.now(timezone.utc).isoformat(),
+            request_time=finished_at,
+            started_at=started_at,
+            finished_at=finished_at,
             reasoning_tokens=getattr(details, "reasoning_tokens", None),
         )
 
