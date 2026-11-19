@@ -66,8 +66,8 @@ kvcache-check \
 # Save full run traces for later review
 kvcache-check --target-url http://localhost:8000 --model <model> --log-file runs.jsonl
 
-# Append one row per test result to a CSV (spreadsheet/plotting-friendly), e.g.
-# to build an accuracy-vs-context-length curve across a preset sweep
+# Write a CloudAI-compatible accuracy summary (Task,Correct,Total,Accuracy,... with an
+# OVERALL row); written once the run finishes, regardless of the exit code
 kvcache-check --target-url http://localhost:8000 --model <model> --accuracy-csv accuracy.csv
 
 # Show both answers for every test, not just failures
