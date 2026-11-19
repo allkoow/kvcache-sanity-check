@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import signal
 import sys
 import uuid
 from dataclasses import dataclass, field
@@ -108,6 +109,13 @@ class RunContext:
     all_results: list[TestResult]
     run_logger: RunLogger | None
     verbose: bool
+    accuracy_csv: Path | None = None
+
+    def record(self, result: TestResult) -> None:
+        """Keep a finished result; the CSV is rewritten so an interrupted run still leaves one."""
+        self.all_results.append(result)
+        if self.accuracy_csv:
+            report.write_accuracy_csv(self.all_results, self.accuracy_csv)
 
 
 @dataclass(frozen=True)
@@ -169,6 +177,10 @@ def _evaluation_status(trace: EvaluationTrace) -> ResultStatus:
 def _incomplete_target_evaluation(target_run: RunResult) -> EvaluationResult:
     reasoning = f"[target incomplete, judge skipped] {describe_generation(target_run)}"
     return EvaluationResult(score=0.0, reasoning=reasoning, passed=False)
+
+
+def _raise_interrupt(signum, frame) -> None:
+    raise KeyboardInterrupt
 
 
 def _failed_request_status(target_run: RunResult) -> ResultStatus:
@@ -245,7 +257,7 @@ def _run_scenario_iterations(context: RunContext, scenario: Scenario, temperatur
                     error=error,
                 )
 
-        context.all_results.append(result)
+        context.record(result)
         report.print_result(result, verbose=context.verbose)
         if context.run_logger:
             context.run_logger.log(scenario=scenario, iteration=i,
@@ -329,7 +341,7 @@ def _run_sequential_pairs(context: RunContext, scenario: Scenario, temperature: 
                         error=error,
                     )
 
-            context.all_results.append(result)
+            context.record(result)
             report.print_result(result, verbose=context.verbose)
             if context.run_logger:
                 context.run_logger.log(scenario=scenario, iteration=i,
@@ -483,19 +495,29 @@ def cli(
         all_results=all_results,
         run_logger=run_logger,
         verbose=verbose,
+        accuracy_csv=Path(accuracy_csv) if accuracy_csv else None,
     )
 
-    for scenario in scenarios:
-        console.print(f"[bold cyan]{scenario.id}[/] — {scenario.description}")
+    # CloudAI and Slurm stop a job with SIGTERM; handled like Ctrl+C so finished results are kept.
+    previous_sigterm = signal.signal(signal.SIGTERM, _raise_interrupt)
+    interrupted = False
+    try:
+        for scenario in scenarios:
+            console.print(f"[bold cyan]{scenario.id}[/] — {scenario.description}")
 
-        effective_temp = scenario.temperature if scenario.temperature is not None else temperature
+            effective_temp = scenario.temperature if scenario.temperature is not None else temperature
 
-        if scenario.mode == "sequential_pairs":
-            _run_sequential_pairs(context, scenario, effective_temp)
-        else:
-            _run_scenario_iterations(context, scenario, effective_temp)
+            if scenario.mode == "sequential_pairs":
+                _run_sequential_pairs(context, scenario, effective_temp)
+            else:
+                _run_scenario_iterations(context, scenario, effective_temp)
 
-        console.print()
+            console.print()
+    except KeyboardInterrupt:
+        interrupted = True
+        console.print(f"\n[bold yellow]Interrupted[/] after {len(all_results)} result(s); the run counts as failed.")
+    finally:
+        signal.signal(signal.SIGTERM, previous_sigterm)
 
     report.print_summary(all_results)
 
@@ -503,7 +525,7 @@ def cli(
         report.write_accuracy_csv(all_results, Path(accuracy_csv))
         console.print(f"Accuracy CSV written to: {accuracy_csv}")
 
-    if not all(r.evaluation.passed for r in all_results):
+    if interrupted or report.run_failed(all_results):
         sys.exit(1)
 
 

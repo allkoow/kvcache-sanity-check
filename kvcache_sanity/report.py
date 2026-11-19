@@ -62,9 +62,14 @@ def print_summary(results: list[TestResult]) -> None:
     ))
 
 
+def run_failed(results: list[TestResult]) -> bool:
+    """A run with no evaluated case proves nothing, so it fails like a run with a failing case."""
+    return not results or not all(result.evaluation.passed for result in results)
+
+
 _CSV_HEADER = [
     "Task", "Correct", "Total", "Accuracy", "Invalid", "ReferenceIncomplete", "TargetIncomplete", "JudgeError",
-    "TargetLoop",
+    "TargetLoop", "Error", "Timeout",
 ]
 
 
@@ -86,15 +91,15 @@ def _csv_row(task: str, results: list[TestResult]) -> list:
     return [
         task, correct, total, f"{accuracy:.4f}",
         reference_incomplete + judge_error, reference_incomplete, statuses[ResultStatus.TARGET_INCOMPLETE], judge_error,
-        target_loop
+        target_loop, statuses[ResultStatus.ERROR], statuses[ResultStatus.TIMEOUT],
     ]
 
 
 def write_accuracy_csv(results: list[TestResult], path: Path) -> None:
     """Write results as a CloudAI-compatible accuracy CSV.
 
-    Columns are ``Task,Correct,Total,Accuracy,Invalid,ReferenceIncomplete,TargetIncomplete,JudgeError,TargetLoop``
-    with one row per scenario (Correct = passed iterations, Accuracy = Correct/Total as a
+    Columns are ``Task,Correct,Total,Accuracy,Invalid,ReferenceIncomplete,TargetIncomplete,JudgeError,TargetLoop,
+    Error,Timeout`` with one row per scenario (Correct = passed iterations, Accuracy = Correct/Total as a
     0.0-1.0 fraction) plus a final OVERALL row aggregating every iteration. CloudAI's
     AIDynamo report strategy reads the Accuracy of the OVERALL row by column name, so the
     file is meaningful even when the process exit code is decoupled from pass/fail (e.g.
@@ -108,6 +113,9 @@ def write_accuracy_csv(results: list[TestResult], path: Path) -> None:
     not invalid ones: part of Total, never of Correct or Invalid. TargetLoop is the subset of
     TargetIncomplete truncated while repeating itself next to a complete reference, a possible
     sign of corrupted KV blocks rather than a too small token budget.
+
+    Error and Timeout count iterations whose request failed or got no response in time.
+    Like TargetIncomplete they are incorrect answers, not invalid ones.
     """
     # Insertion-ordered so the CSV mirrors run order.
     per_scenario: dict[str, list[TestResult]] = {}
