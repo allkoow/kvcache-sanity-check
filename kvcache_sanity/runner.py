@@ -183,6 +183,19 @@ def _call_api(
 _ACK = "Understood, I've read that document. Ready for the next one or your question."
 
 
+def inject_prefix(messages: list[dict], prefix: str | None) -> list[dict]:
+    """Copy of messages with ``[prefix] `` at the start of the system message.
+
+    The prefix changes the first tokens of the conversation, so a KV cache keyed on the
+    token prefix cannot serve any block of it from an earlier run under another prefix.
+    """
+    copied = [dict(message) for message in messages]
+    if prefix:
+        system = next(message for message in copied if message["role"] == "system")
+        system["content"] = f"[{prefix}] " + system["content"]
+    return copied
+
+
 def build_messages(
     scenario: Scenario,
     documents: dict[str, Document],
@@ -204,9 +217,6 @@ def build_messages(
         "When asked about a specific document, answer ONLY about that document. "
         "Do not summarize or mention other documents unless explicitly asked."
     )
-    if unique_prefix:
-        system_content = f"[{unique_prefix}] " + system_content
-
     messages: list[dict] = [{"role": "system", "content": system_content}]
 
     for i, doc_id in enumerate(scenario.document_ids, 1):
@@ -218,7 +228,7 @@ def build_messages(
         messages.append({"role": "assistant", "content": _ACK})
 
     messages.append({"role": "user", "content": scenario.question})
-    return messages
+    return inject_prefix(messages, unique_prefix)
 
 
 def run_scenario(
@@ -292,9 +302,6 @@ def build_pairs_messages(
         "Answer ONLY about the document in that specific message. "
         "Do not refer to, summarize, or include content from documents in any previous messages."
     )
-    if unique_prefix:
-        system_content = f"[{unique_prefix}] " + system_content
-
     messages: list[dict] = [{"role": "system", "content": system_content}]
 
     for i, pair in enumerate(pairs[:up_to_index + 1]):
@@ -309,7 +316,7 @@ def build_pairs_messages(
         if i < up_to_index:
             messages.append({"role": "assistant", "content": _PAIRS_ACK})
 
-    return messages
+    return inject_prefix(messages, unique_prefix)
 
 
 def run_sequential_pair(

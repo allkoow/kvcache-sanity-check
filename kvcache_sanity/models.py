@@ -130,10 +130,13 @@ class ReferenceAttemptLog(BaseModel):
     completion_tokens: int
     request_id: str = ""
     request_time: str = ""
+    started_at: str = ""
+    finished_at: str = ""
     complete: bool
     reasoning_tokens: Optional[int] = None
     truncation: Optional[str] = None
     truncated_in_reasoning: Optional[bool] = None
+    error: Optional[str] = None
 
 
 class RunLog(BaseModel):
@@ -162,3 +165,39 @@ class RunLog(BaseModel):
     status: ResultStatus | None = None  # absent in logs written before statuses existed
     reference_attempts: list[ReferenceAttemptLog] = []
     error: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Phase artifacts — written to --state-dir so phases can run with checkpoints between them.
+# ---------------------------------------------------------------------------
+
+class Case(BaseModel):
+    """One evaluated question: the exact conversation sent, without a cache-busting prefix."""
+
+    case_id: str
+    scenario_id: str
+    question: str
+    messages: list[dict]
+    # Detects a corpus or scenario change between the phase that wrote an artifact and the one reading it.
+    messages_sha256: str
+    temperature: float | None = None  # scenario override of the run temperature
+
+
+class ReferenceRecord(BaseModel):
+    """Reference answer for one case: PASS when complete, else REFERENCE_INCOMPLETE, ERROR or TIMEOUT."""
+
+    case: Case
+    prefix: str  # prefix of the accepted (last) attempt; replays reuse it to read its cached blocks
+    answer: str
+    status: ResultStatus
+    attempts: list[ReferenceAttemptLog] = []
+    error: Optional[str] = None
+
+
+class ReferenceSet(BaseModel):
+    schema_version: int = 1
+    created_at: str
+    model: str
+    temperature: float
+    max_tokens: int
+    records: list[ReferenceRecord]
