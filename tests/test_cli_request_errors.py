@@ -23,7 +23,5 @@ def test_target_timeout_is_a_failed_iteration(tmp_path, monkeypatch):
     assert run.overall["Correct"] == "0"
     assert run.overall["Timeout"] == "1"
     assert run.overall["Error"] == "0"
-    assert run.logs[0]["status"] == "TIMEOUT"
-    assert run.logs[0]["error"].startswith("APITimeoutError")
     # Reference and target only: a failed target is never judged.
     assert calls["count"] == 2

@@ -47,17 +47,17 @@ def test_csv_is_current_after_every_result(tmp_path, monkeypatch):
     seen_totals: list[str] = []
 
     def responder(kwargs):
-        if is_judge_request(kwargs):
-            return make_response(JUDGE_PASS)
+        if not is_judge_request(kwargs):
+            return make_response("Guido van Rossum.")
 
         if csv_path.exists():
             overall = csv_path.read_text().splitlines()[-1]
             seen_totals.append(overall.split(",")[2])
 
-        return make_response("Guido van Rossum.")
+        return make_response(JUDGE_PASS)
 
     run = run_cli(tmp_path, monkeypatch, responder, "--iterations", "3")
 
     assert run.exit_code == 0
-    # Before the 2nd and 3rd target request the CSV already holds the earlier iterations.
+    # Before the 2nd and 3rd judge request the CSV already holds the earlier iterations.
     assert seen_totals == ["1", "2"]

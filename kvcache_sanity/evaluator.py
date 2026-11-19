@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from openai import OpenAI
 from rich.console import Console as _Console
 from rich.markup import escape
-from kvcache_sanity.models import EvaluationResult, EvaluationTrace, JudgeAttemptLog
+from kvcache_sanity.models import EvaluationResult, EvaluationTrace, JudgeAttemptLog, ResultStatus
 from kvcache_sanity.runner import API_ERRORS
 
 _stderr = _Console(stderr=True)
@@ -319,3 +319,12 @@ def evaluate_answers(
         attempt_logs=attempt_logs,
         judge_error=judge_error,
     )
+
+
+def verdict_status(trace: EvaluationTrace) -> ResultStatus:
+    """Status of a judged answer: the verdict, or JUDGE_ERROR when the judge gave none."""
+
+    if trace.judge_error is not None:
+        return ResultStatus.JUDGE_ERROR
+
+    return ResultStatus.PASS if trace.result.passed else ResultStatus.FAIL

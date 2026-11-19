@@ -63,6 +63,7 @@ class TestResult(BaseModel):
     error: Optional[str] = None
     target_request_id: str = ""
     target_truncation: Optional[str] = None
+    phase: str = ""  # name of the replay the target answer came from; empty outside phased runs
 
 
 # ---------------------------------------------------------------------------
@@ -203,17 +204,6 @@ class ReferenceSet(BaseModel):
     records: list[ReferenceRecord]
 
 
-class PrefixMode(str, Enum):
-    """Which cache-busting prefix a replay sends each case under."""
-
-    # The reference prefix: reads the blocks the reference phase stored.
-    REUSE = "reuse"
-    # A new prefix per case, shared by every iteration of the replay: the first request writes, the rest read.
-    FRESH = "fresh"
-    # The prefix an earlier replay used, e.g. to read after a reconfiguration what was written before it.
-    FROM = "from"
-
-
 class ReplayAttempt(BaseModel):
     """One replayed request: PASS when the generation is complete, else TARGET_INCOMPLETE, ERROR or TIMEOUT.
 
@@ -236,8 +226,6 @@ class ReplayAttempt(BaseModel):
 
 class ReplayRun(BaseModel):
     name: str
-    prefix_mode: PrefixMode
-    prefix_source: Optional[str] = None  # the earlier replay, set only for PrefixMode.FROM
     started_at: str
-    finished_at: str
-    attempts: list[ReplayAttempt]
+    finished_at: str = ""  # empty while the replay is running or when it was interrupted
+    attempts: list[ReplayAttempt] = []

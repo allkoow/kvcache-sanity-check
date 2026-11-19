@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import csv
-import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -68,7 +67,6 @@ class CliRun:
     exit_code: int
     output: str
     csv_rows: list[dict]
-    logs: list[dict]
     client: FakeClient
 
     @property
@@ -84,7 +82,6 @@ def run_cli(tmp_path: Path, monkeypatch, responder: Callable[[dict], SimpleNames
     scenarios_file = tmp_path / "scenarios.yaml"
     scenarios_file.write_text(SCENARIO_YAML)
     accuracy_csv = tmp_path / "accuracy_results.csv"
-    log_file = tmp_path / "runs.jsonl"
 
     client = FakeClient(responder)
     monkeypatch.setattr(main, "make_client", lambda *_args, **_kwargs: client)
@@ -94,12 +91,10 @@ def run_cli(tmp_path: Path, monkeypatch, responder: Callable[[dict], SimpleNames
         "--model", "model",
         "--scenarios-file", str(scenarios_file),
         "--accuracy-csv", str(accuracy_csv),
-        "--log-file", str(log_file),
         *args,
     ]
     outcome = CliRunner().invoke(main.cli, cli_args)
 
     csv_rows = list(csv.DictReader(accuracy_csv.open())) if accuracy_csv.exists() else []
-    logs = [json.loads(line) for line in log_file.read_text().splitlines()] if log_file.exists() else []
 
-    return CliRun(outcome.exit_code, outcome.output, csv_rows, logs, client)
+    return CliRun(outcome.exit_code, outcome.output, csv_rows, client)

@@ -1,6 +1,7 @@
 import csv
 from collections import Counter
 from pathlib import Path
+from typing import Callable
 
 from rich.console import Console
 from rich.panel import Panel
@@ -117,12 +118,25 @@ def write_accuracy_csv(results: list[TestResult], path: Path) -> None:
 
     Error and Timeout count iterations whose request failed or got no response in time.
     Like TargetIncomplete they are incorrect answers, not invalid ones.
-    """
-    # Insertion-ordered so the CSV mirrors run order.
-    per_scenario: dict[str, list[TestResult]] = {}
 
-    for result in results:
-        per_scenario.setdefault(result.scenario_id, []).append(result)
+    Results from more than one replay get ``<phase>:<scenario>`` rows and a ``<phase>:OVERALL``
+    row per replay; the final OVERALL row still aggregates every iteration.
+    """
+
+    per_phase = _group(results, lambda result: result.phase)
+    labeled = len([phase for phase in per_phase if phase]) > 1
+    rows = []
+
+    for phase, phase_results in per_phase.items():
+        label = f"{phase}:" if labeled and phase else ""
+
+        for scenario_id, scenario_results in _group(phase_results, lambda result: result.scenario_id).items():
+            rows.append(_csv_row(f"{label}{scenario_id}", scenario_results))
+
+        if label:
+            rows.append(_csv_row(f"{label}OVERALL", phase_results))
+
+    rows.append(_csv_row("OVERALL", results))
 
     path = Path(path)
     if path.parent != Path(""):
@@ -131,8 +145,15 @@ def write_accuracy_csv(results: list[TestResult], path: Path) -> None:
     with path.open("w", newline="", encoding="utf-8") as csv_file:
         writer = csv.writer(csv_file)
         writer.writerow(_CSV_HEADER)
+        writer.writerows(rows)
 
-        for scenario_id, scenario_results in per_scenario.items():
-            writer.writerow(_csv_row(scenario_id, scenario_results))
 
-        writer.writerow(_csv_row("OVERALL", results))
+def _group(results: list[TestResult], key: Callable[[TestResult], str]) -> dict[str, list[TestResult]]:
+    """Results by key, in first-seen order so the CSV mirrors run order."""
+
+    groups: dict[str, list[TestResult]] = {}
+
+    for result in results:
+        groups.setdefault(key(result), []).append(result)
+
+    return groups

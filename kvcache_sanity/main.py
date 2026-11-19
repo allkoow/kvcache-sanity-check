@@ -19,6 +19,7 @@ from kvcache_sanity.evaluator import (
     PROMPT_NAMES,
     JudgeConfig,
     evaluate_answers,
+    verdict_status,
 )
 from kvcache_sanity.logger import RunLogger
 from kvcache_sanity.models import (
@@ -35,16 +36,18 @@ from kvcache_sanity.runner import (
     DEFAULT_REFERENCE_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
     describe_generation,
-    get_reference_answer,
     get_reference_pair_answer,
     is_complete,
     make_client,
     prepare_reference,
-    run_scenario,
     run_sequential_pair,
 )
 from kvcache_sanity.scenarios import find_named_scenarios, load_scenarios
 from kvcache_sanity import report
+from kvcache_sanity.cases import build_cases
+from kvcache_sanity.engine import run_phases
+from kvcache_sanity.phases import EvaluatePhase, PhaseContext, ReferencePhase, ReplayPhase, RunState
+from kvcache_sanity.state import StateDir
 
 console = Console()
 
@@ -142,25 +145,17 @@ def _run_reference(
     scenario: Scenario,
     temperature: float,
     prefix: str,
-    pair_index: int | None = None,
+    pair_index: int,
 ) -> ReferenceRun:
-    """Prepare the reference for a scenario, or for one of its pairs in sequential_pairs mode."""
-    if pair_index is None:
-        label = f"scenario={scenario.id}"
+    """Prepare the reference for one pair of a sequential_pairs scenario."""
 
-        def generate(attempt_prefix: str) -> RunResult:
-            return get_reference_answer(
-                scenario, context.documents, context.target_client, context.model,
-                max_tokens=context.max_tokens, prefix=attempt_prefix, temperature=temperature,
-            )
-    else:
-        label = f"scenario={scenario.id}, {_pair_label(scenario.pairs, pair_index)}"
+    label = f"scenario={scenario.id}, {_pair_label(scenario.pairs, pair_index)}"
 
-        def generate(attempt_prefix: str) -> RunResult:
-            return get_reference_pair_answer(
-                scenario.pairs, context.documents, context.target_client, context.model, pair_index,
-                max_tokens=context.max_tokens, prefix=attempt_prefix, temperature=temperature,
-            )
+    def generate(attempt_prefix: str) -> RunResult:
+        return get_reference_pair_answer(
+            scenario.pairs, context.documents, context.target_client, context.model, pair_index,
+            max_tokens=context.max_tokens, prefix=attempt_prefix, temperature=temperature,
+        )
 
     try:
         attempts = prepare_reference(generate, prefix, retries=context.reference_retries, label=label)
@@ -168,12 +163,6 @@ def _run_reference(
         return ReferenceRun(error=str(exc) or repr(exc))
 
     return ReferenceRun(attempts=attempts)
-
-
-def _evaluation_status(trace: EvaluationTrace) -> ResultStatus:
-    if trace.judge_error is not None:
-        return ResultStatus.JUDGE_ERROR
-    return ResultStatus.PASS if trace.result.passed else ResultStatus.FAIL
 
 
 def _incomplete_target_evaluation(target_run: RunResult) -> EvaluationResult:
@@ -192,80 +181,6 @@ def _failed_request_status(target_run: RunResult) -> ResultStatus:
 def _incomplete_reference_evaluation(attempts: list[RunResult]) -> EvaluationResult:
     reasoning = f"[reference incomplete after {len(attempts)} attempt(s)] {describe_generation(attempts[-1])}"
     return EvaluationResult(score=0.0, reasoning=reasoning, passed=False)
-
-
-def _run_scenario_iterations(context: RunContext, scenario: Scenario, temperature: float) -> None:
-    # Reference runs first with a shared UUID, warming the KV cache.
-    # All target iterations reuse the UUID of the accepted reference so they hit
-    # blocks cached by the reference call — every iteration exercises the cache equally.
-    reference = _run_reference(context, scenario, temperature, str(uuid.uuid4()))
-    reference_run = reference.run
-    ref_error = reference.error
-
-    for i in range(1, context.iterations + 1):
-        error = ref_error
-        target_run = RunResult(answer="")
-        trace = EvaluationTrace(result=EvaluationResult(score=0.0, reasoning="", passed=False))
-
-        if ref_error:
-            result = TestResult(
-                scenario_id=scenario.id, iteration=i, question=scenario.question,
-                target_answer="", reference_answer="",
-                evaluation=EvaluationResult(score=0.0, reasoning=ref_error, passed=False),
-                status=ResultStatus.ERROR,
-                error=ref_error,
-            )
-        elif not is_complete(reference_run):
-            trace = EvaluationTrace(result=_incomplete_reference_evaluation(reference.attempts))
-            result = TestResult(
-                scenario_id=scenario.id, iteration=i, question=scenario.question,
-                target_answer="", reference_answer=reference_run.answer,
-                evaluation=trace.result,
-                status=ResultStatus.REFERENCE_INCOMPLETE,
-            )
-        else:
-            try:
-                target_run = run_scenario(
-                    scenario, context.documents, context.target_client, context.model,
-                    unique_prefix=reference_run.unique_prefix, max_tokens=context.max_tokens,
-                    temperature=temperature, empty_retries=0,
-                )
-                if target_run.error:
-                    error = target_run.error
-                    trace = EvaluationTrace(result=EvaluationResult(score=0.0, reasoning=error, passed=False))
-                    status = _failed_request_status(target_run)
-                elif is_complete(target_run):
-                    trace = evaluate_answers(scenario.question, target_run.answer, reference_run.answer, context.judge)
-                    status = _evaluation_status(trace)
-                else:
-                    trace = EvaluationTrace(result=_incomplete_target_evaluation(target_run))
-                    status = ResultStatus.TARGET_INCOMPLETE
-                result = TestResult(
-                    scenario_id=scenario.id, iteration=i, question=scenario.question,
-                    target_answer=target_run.answer, reference_answer=reference_run.answer,
-                    evaluation=trace.result,
-                    status=status,
-                    error=target_run.error,
-                    target_request_id=target_run.request_id,
-                    target_truncation=target_run.truncation,
-                )
-            except Exception as exc:
-                error = str(exc)
-                result = TestResult(
-                    scenario_id=scenario.id, iteration=i, question=scenario.question,
-                    target_answer=target_run.answer, reference_answer=reference_run.answer,
-                    evaluation=EvaluationResult(score=0.0, reasoning=str(exc), passed=False),
-                    status=ResultStatus.ERROR,
-                    error=error,
-                )
-
-        context.record(result)
-        report.print_result(result, verbose=context.verbose)
-        if context.run_logger:
-            context.run_logger.log(scenario=scenario, iteration=i,
-                                   target=target_run, reference=reference_run, trace=trace, error=error,
-                                   temperature=temperature, status=result.status,
-                                   reference_attempts=reference.attempts)
 
 
 def _run_sequential_pairs(context: RunContext, scenario: Scenario, temperature: float) -> None:
@@ -318,7 +233,7 @@ def _run_sequential_pairs(context: RunContext, scenario: Scenario, temperature: 
                         status = _failed_request_status(target_run)
                     elif is_complete(target_run):
                         trace = evaluate_answers(pair.question, target_run.answer, reference_run.answer, context.judge)
-                        status = _evaluation_status(trace)
+                        status = verdict_status(trace)
                     else:
                         trace = EvaluationTrace(result=_incomplete_target_evaluation(target_run))
                         status = ResultStatus.TARGET_INCOMPLETE
@@ -428,6 +343,13 @@ def _run_sequential_pairs(context: RunContext, scenario: Scenario, temperature: 
                    "Per-scenario pass/fail is aggregated into a 0.0-1.0 fraction; Invalid and TargetIncomplete "
                    "iterations count in Total; TargetLoop is the subset of TargetIncomplete cut while repeating. "
                    "The file is written regardless of the exit code.")
+@click.option(
+    "--state-dir",
+    default=None,
+    type=click.Path(file_okay=False),
+    metavar="DIR",
+    help="Save the reference set and every replay (JSON) to DIR after each phase.",
+)
 @click.option("--verbose", "-v", is_flag=True,
               help="Print target and reference answers for every test, not just failures.")
 def cli(
@@ -435,7 +357,7 @@ def cli(
     judge_url, judge_model, judge_api_key,
     temperature, judge_temperature, judge_max_tokens, judge_retries, judge_structured, request_timeout,
     reference_retries, iterations, threshold, scenarios_name, scenarios_file, corpus_dir,
-    max_tokens, judge_prompt, log_file, accuracy_csv, verbose,
+    max_tokens, judge_prompt, log_file, accuracy_csv, state_dir, verbose,
 ):
     """Sanity-check LLM output correctness when using offloaded KV cache.
 
@@ -509,25 +431,43 @@ def cli(
     previous_sigterm = signal.signal(signal.SIGTERM, _raise_interrupt)
     interrupted = False
 
+    phase_context = PhaseContext(
+        target_client=target_client,
+        model=model,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        reference_retries=reference_retries,
+    )
+    # FIXME: the phases write no --log-file traces yet; only sequential_pairs scenarios are logged.
+    phases = [
+        ReferencePhase(phase_context),
+        ReplayPhase(phase_context, "replay", iterations),
+        EvaluatePhase(judge, on_result=context.record, verbose=verbose),
+    ]
+    state = RunState(cases=build_cases(scenarios, documents))
+    pair_scenarios = [scenario for scenario in scenarios if scenario.mode == "sequential_pairs"]
+
     try:
-        for scenario in scenarios:
+        if state.cases:
+            interrupted = run_phases(phases, state, StateDir(Path(state_dir)) if state_dir else None)
+
+        for scenario in pair_scenarios:
+            if interrupted:
+                break
+
             console.print(f"[bold cyan]{scenario.id}[/] — {scenario.description}")
 
             effective_temp = scenario.temperature if scenario.temperature is not None else temperature
-
-            if scenario.mode == "sequential_pairs":
-                _run_sequential_pairs(context, scenario, effective_temp)
-            else:
-                _run_scenario_iterations(context, scenario, effective_temp)
+            _run_sequential_pairs(context, scenario, effective_temp)
 
             console.print()
     except KeyboardInterrupt:
         interrupted = True
-        console.print(
-            f"\n[bold yellow]Interrupted[/] after {len(all_results)} result(s); the run counts as failed."
-        )
     finally:
         signal.signal(signal.SIGTERM, previous_sigterm)
+
+    if interrupted:
+        console.print(f"\n[bold yellow]Interrupted[/] after {len(all_results)} result(s); the run counts as failed.")
 
     report.print_summary(all_results)
 
