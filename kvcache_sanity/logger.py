@@ -6,11 +6,14 @@ from kvcache_sanity.models import (
     EvaluationResult,
     EvaluationTrace,
     MessageLog,
+    ReferenceAttemptLog,
+    ResultStatus,
     RunLog,
     RunResult,
     Scenario,
     TestResult,
 )
+from kvcache_sanity.runner import is_complete
 
 _DOC_TRUNCATE_LIMIT = 200
 
@@ -46,7 +49,24 @@ class RunLogger:
         trace: EvaluationTrace,
         error: str | None = None,
         temperature: float | None = None,
+        status: ResultStatus | None = None,
+        reference_attempts: list[RunResult] | None = None,
     ) -> None:
+        attempt_logs = [
+            ReferenceAttemptLog(
+                prefix=attempt.unique_prefix or "",
+                answer=attempt.answer,
+                finish_reason=attempt.finish_reason,
+                completion_tokens=attempt.completion_tokens,
+                request_id=attempt.request_id,
+                request_time=attempt.request_time,
+                complete=is_complete(attempt),
+                reasoning_tokens=attempt.reasoning_tokens,
+                truncation=attempt.truncation,
+                truncated_in_reasoning=attempt.truncated_in_reasoning,
+            )
+            for attempt in reference_attempts or []
+        ]
         run_log = RunLog(
             timestamp=datetime.now(timezone.utc).isoformat(),
             scenario_id=scenario.id,
@@ -59,10 +79,19 @@ class RunLogger:
             target_request_id=target.request_id,
             reference_request_id=reference.request_id,
             target_request_time=target.request_time,
+            target_finish_reason=target.finish_reason,
+            target_completion_tokens=target.completion_tokens,
+            target_reasoning_tokens=target.reasoning_tokens,
+            target_truncation=target.truncation,
+            target_truncated_in_reasoning=target.truncated_in_reasoning,
             temperature=temperature,
             judge_messages=_truncate_messages(trace.judge_messages),
             judge_raw_response=trace.judge_raw_response,
+            judge_attempts=trace.judge_attempts,
+            judge_attempt_details=trace.attempt_logs,
             evaluation=trace.result,
+            status=status,
+            reference_attempts=attempt_logs,
             error=error,
         )
         with open(self._path, "a", encoding="utf-8") as f:

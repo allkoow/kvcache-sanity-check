@@ -1,8 +1,24 @@
 import json
-import re
 import uuid
+from dataclasses import dataclass
 from openai import OpenAI
-from kvcache_sanity.models import EvaluationResult, EvaluationTrace
+from rich.console import Console as _Console
+from rich.markup import escape
+from kvcache_sanity.models import EvaluationResult, EvaluationTrace, JudgeAttemptLog
+
+_stderr = _Console(stderr=True)
+
+# gpt-oss emits harmony channels ("analysis…assistantfinal…") inside `content` when the
+# server runs without a reasoning parser; only the final channel carries the verdict.
+_HARMONY_FINAL_MARKER = "assistantfinal"
+
+
+def _strip_reasoning(raw: str) -> str:
+    marker_pos = raw.rfind(_HARMONY_FINAL_MARKER)
+    if marker_pos == -1:
+        return raw
+    return raw[marker_pos + len(_HARMONY_FINAL_MARKER):].strip()
+
 
 def _extract_json(raw: str) -> str:
     """Best-effort extraction of a JSON object from a free-form model response.
@@ -93,108 +109,156 @@ Respond with valid JSON only — no markdown, no explanation outside the JSON:
 
 PROMPT_NAMES = sorted(_PROMPTS)
 DEFAULT_PROMPT = "strict"
+DEFAULT_JUDGE_MAX_TOKENS = 4096
+DEFAULT_JUDGE_RETRIES = 2
+
+
+@dataclass(frozen=True)
+class JudgeConfig:
+    """How to call the LLM-as-judge and when its score counts as a pass.
+
+    prompt selects the template: "strict" (fine-grained consistency scoring) or
+    "topic" (only catches wrong-document answers, ignores detail differences).
+    """
+
+    client: OpenAI
+    model: str
+    prompt: str = DEFAULT_PROMPT
+    temperature: float = 0.0
+    max_tokens: int = DEFAULT_JUDGE_MAX_TOKENS
+    retries: int = DEFAULT_JUDGE_RETRIES
+    threshold: float = 0.7
+
+    def __post_init__(self) -> None:
+        if self.prompt not in _PROMPTS:
+            raise ValueError(f"Unknown judge prompt {self.prompt!r}. Choose from: {PROMPT_NAMES}")
+
+
+def _parse_judge_response(raw: str, threshold: float) -> EvaluationResult:
+    """Return the verdict of a judge response; raise ValueError naming the problem when it has none.
+
+    Only a complete JSON object with an integer score in 0-10 and a string reasoning counts.
+    The score alone decides the verdict; a "verdict" field in the response is ignored.
+    """
+    if not raw:
+        raise ValueError("empty response")
+
+    try:
+        data = json.loads(_extract_json(_strip_reasoning(raw)))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"not valid JSON ({exc.msg})") from exc
+
+    if not isinstance(data, dict):
+        raise ValueError(f"JSON is not an object: {type(data).__name__}")
+
+    score = data.get("score")
+    if isinstance(score, bool) or not isinstance(score, int):
+        raise ValueError(f"score is not an integer: {score!r}")
+    if not 0 <= score <= 10:
+        raise ValueError(f"score out of range 0-10: {score}")
+
+    reasoning = data.get("reasoning")
+    if not isinstance(reasoning, str):
+        raise ValueError(f"reasoning is not a string: {reasoning!r}")
+
+    # For the topic prompt, prepend the identified topics to make failures
+    # immediately readable: "Ancient Rome → World War II: ..."
+    if "reference_topic" in data and "target_topic" in data:
+        reasoning = f"[{data['reference_topic']} → {data['target_topic']}] {reasoning}"
+
+    score_01 = score / 10.0
+    return EvaluationResult(score=round(score_01, 3), reasoning=reasoning, passed=score_01 >= threshold)
 
 
 def evaluate_answers(
     question: str,
     target_answer: str,
     reference_answer: str,
-    client: OpenAI,
-    model: str,
-    threshold: float = 0.7,
-    judge_client: OpenAI | None = None,
-    judge_prompt: str = DEFAULT_PROMPT,
-    judge_temperature: float = 0.0,
+    judge: JudgeConfig,
 ) -> EvaluationTrace:
     """Compare target_answer to reference_answer using LLM-as-judge.
-
-    judge_prompt selects which prompt template to use: "strict" (default,
-    fine-grained consistency scoring) or "topic" (only catches wrong-document
-    answers, ignores detail differences).
 
     The evaluation call itself uses a unique prefix to prevent cache hits,
     since the judge must not be influenced by prior cached state either.
 
+    A judge response without a valid verdict (empty, truncated, not JSON, wrong schema)
+    says nothing about the target answer, so the call is repeated up to judge.retries
+    times. A valid verdict, PASS or FAIL, is never retried. Every attempt gets a fresh
+    prefix, which also changes the generation at temperature 0. When no attempt yields
+    a valid verdict the trace carries judge_error and a non-passing result.
+
     Returns an EvaluationTrace that bundles the EvaluationResult with the full
-    judge message exchange and raw response for logging.
+    judge message exchange, the raw response and every attempt for logging.
     """
-    if judge_prompt not in _PROMPTS:
-        raise ValueError(f"Unknown judge_prompt {judge_prompt!r}. Choose from: {PROMPT_NAMES}")
-
-    eval_client = judge_client or client
-    eval_prefix = str(uuid.uuid4())
-
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                f"[eval-session:{eval_prefix}] "
-                "You are a precise answer evaluator. Respond only with valid JSON."
-            ),
-        },
-        {
-            "role": "user",
-            "content": _PROMPTS[judge_prompt].format(
-                question=question,
-                reference_answer=reference_answer,
-                target_answer=target_answer,
-            ),
-        },
-    ]
-
-    response = eval_client.chat.completions.create(
-        model=model,
-        messages=messages,
-        max_tokens=1024,
-        temperature=judge_temperature,
+    prompt = _PROMPTS[judge.prompt].format(
+        question=question,
+        reference_answer=reference_answer,
+        target_answer=target_answer,
     )
+    max_attempts = max(judge.retries, 0) + 1
+    attempt_logs: list[JudgeAttemptLog] = []
+    result: EvaluationResult | None = None
 
-    raw = (response.choices[0].message.content or "").strip()
-
-    try:
-        data = json.loads(_extract_json(raw))
-        score_01 = float(data["score"]) / 10.0
-        passed = score_01 >= threshold
-        # For the topic prompt, prepend the identified topics to make failures
-        # immediately readable: "Ancient Rome → World War II: ..."
-        reasoning = str(data.get("reasoning", ""))
-        if "reference_topic" in data and "target_topic" in data:
-            reasoning = f"[{data['reference_topic']} → {data['target_topic']}] {reasoning}"
-        result = EvaluationResult(
-            score=round(score_01, 3),
-            reasoning=reasoning,
-            passed=passed,
+    for attempt in range(1, max_attempts + 1):
+        eval_prefix = str(uuid.uuid4())
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    f"[eval-session:{eval_prefix}] "
+                    "You are a precise answer evaluator. Respond only with valid JSON."
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ]
+        response = judge.client.chat.completions.create(
+            model=judge.model,
+            messages=messages,
+            max_tokens=judge.max_tokens,
+            temperature=judge.temperature,
         )
-    except (json.JSONDecodeError, KeyError, ValueError):
-        if not raw:
-            result = EvaluationResult(
-                score=0.0,
-                reasoning="[empty response from judge — server returned no content]",
-                passed=False,
-            )
-        else:
-            # Truncated JSON fallback: extract score with regex if present
-            score_match = re.search(r'"score"\s*:\s*(\d+)', raw)
-            verdict_match = re.search(r'"verdict"\s*:\s*"(pass|fail)"', raw, re.IGNORECASE)
-            if score_match:
-                score_01 = float(score_match.group(1)) / 10.0
-                passed = verdict_match.group(1).lower() == "pass" if verdict_match else score_01 >= threshold
-                result = EvaluationResult(
-                    score=round(score_01, 3),
-                    reasoning=f"[truncated JSON, score extracted] {raw[:200]}",
-                    passed=passed,
-                )
-            else:
-                passed = "pass" in raw.lower() and "fail" not in raw.lower()
-                result = EvaluationResult(
-                    score=1.0 if passed else 0.0,
-                    reasoning=f"[JSON parse failed] raw response: {raw[:300]}",
-                    passed=passed,
-                )
+        choice = response.choices[0]
+        raw = (choice.message.content or "").strip()
+
+        problem: str | None = None
+        try:
+            result = _parse_judge_response(raw, judge.threshold)
+        except ValueError as exc:
+            problem = str(exc)
+
+        attempt_logs.append(JudgeAttemptLog(
+            prefix=eval_prefix,
+            raw_response=raw,
+            finish_reason=choice.finish_reason or "",
+            completion_tokens=response.usage.completion_tokens if response.usage else 0,
+            request_id=response.id or "",
+            problem=problem,
+        ))
+        if problem is None:
+            break
+
+        outcome = "Retrying…" if attempt < max_attempts else "Giving up."
+        _stderr.print(
+            f"[yellow]WARNING[/yellow]: no valid judge verdict on attempt {attempt}/{max_attempts}: "
+            f"{escape(problem)} (finish_reason={choice.finish_reason!r}, request_id={response.id}). {outcome}"
+        )
+
+    judge_error = attempt_logs[-1].problem
+    if judge_error is not None:
+        result = EvaluationResult(
+            score=0.0,
+            reasoning=f"[judge error after {attempt} attempt(s)] {judge_error}",
+            passed=False,
+        )
+    elif attempt > 1:
+        result.reasoning = f"[judge attempt {attempt}/{max_attempts}] {result.reasoning}"
 
     return EvaluationTrace(
         result=result,
         judge_messages=messages,
         judge_raw_response=raw,
         eval_prefix=eval_prefix,
+        judge_attempts=attempt,
+        attempt_logs=attempt_logs,
+        judge_error=judge_error,
     )

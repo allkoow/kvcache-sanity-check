@@ -1,11 +1,74 @@
+import re
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timezone
 from openai import OpenAI
 from rich.console import Console as _Console
+from rich.markup import escape
 from kvcache_sanity.models import Scenario, ScenarioPair, Document, RunResult
 
 _stderr = _Console(stderr=True)
 _MAX_EMPTY_RETRIES = 3
+DEFAULT_REFERENCE_RETRIES = 2
+
+# Loop detection looks at the tail of a truncated output: in a degenerate loop most
+# fixed-length substrings of the tail occur more than once, in normal prose almost none do.
+_LOOP_TAIL_CHARS = 2000
+_LOOP_MIN_TAIL_CHARS = 200
+_LOOP_SHINGLE_CHARS = 32
+_LOOP_REPEATED_RATIO = 0.5
+_DIGITS = re.compile(r"\d")
+
+
+def repeated_tail_ratio(text: str) -> float:
+    """Fraction of 32-char substrings in the output tail that already appeared earlier in that tail.
+
+    Digits are masked so loops that only advance a counter ("Step 7: …", "Step 8: …") still count.
+    """
+
+    tail = _DIGITS.sub("0", " ".join(text.split()))[-_LOOP_TAIL_CHARS:]
+
+    if len(tail) < _LOOP_MIN_TAIL_CHARS:
+        return 0.0
+
+    total = len(tail) - _LOOP_SHINGLE_CHARS + 1
+    unique = {tail[i:i + _LOOP_SHINGLE_CHARS] for i in range(total)}
+
+    return 1 - len(unique) / total
+
+
+def classify_truncation(text: str) -> str:
+    """'loop' when a truncated output is repeating itself (more tokens would not help), else 'budget'."""
+    return "loop" if repeated_tail_ratio(text) >= _LOOP_REPEATED_RATIO else "budget"
+
+
+def _truncated_in_reasoning(content: str, reasoning: str) -> bool:
+    """True when generation stopped before the final answer began.
+
+    Detectable only when the server returns reasoning in a separate field.
+    """
+    return bool(reasoning.strip()) and not content.strip()
+
+
+def describe_generation(run: RunResult) -> str:
+    """One-line summary of how a generation ended, for warnings and incomplete-case reasons."""
+
+    parts = [f"finish_reason={run.finish_reason!r}"]
+    if run.truncation:
+        parts.append(f"truncation={run.truncation}")
+
+    if run.truncated_in_reasoning is not None:
+        parts.append(f"truncated_in_reasoning={run.truncated_in_reasoning}")
+
+    parts.append(f"completion_tokens={run.completion_tokens}")
+
+    if run.reasoning_tokens is not None:
+        parts.append(f"reasoning_tokens={run.reasoning_tokens}")
+
+    parts.append(f"answer_chars={len(run.answer.strip())}")
+    parts.append(f"request_id={run.request_id}")
+
+    return ", ".join(parts)
 
 
 def _call_api(
@@ -15,58 +78,66 @@ def _call_api(
     max_tokens: int,
     label: str = "",
     temperature: float = 0.1,
-) -> tuple[str, str, int, str, str]:
+    empty_retries: int = _MAX_EMPTY_RETRIES,
+) -> RunResult:
     """Call the chat completions API, retrying on empty answers and warning on truncation.
 
-    Returns (answer, finish_reason, completion_tokens, request_id, request_time).
     request_time is an ISO-8601 UTC timestamp captured immediately after the response
     is received — useful for correlating with server-side logs.
     """
-    tag = f" [{label}]" if label else ""
-    answer = ""
-    finish_reason = ""
-    completion_tokens = 0
-    request_id = ""
-    request_time = ""
+    tag = escape(f" [{label}]") if label else ""
+    run = RunResult(answer="", messages=messages)
 
-    for attempt in range(_MAX_EMPTY_RETRIES + 1):
+    for attempt in range(empty_retries + 1):
         response = client.chat.completions.create(
             model=model,
             messages=messages,
             max_tokens=max_tokens,
             temperature=temperature,
         )
-        request_time = datetime.now(timezone.utc).isoformat()
         choice = response.choices[0]
-        answer = choice.message.content or ""
-        finish_reason = choice.finish_reason or ""
-        completion_tokens = (response.usage.completion_tokens if response.usage else 0)
-        request_id = response.id or ""
+        usage = response.usage
+        details = getattr(usage, "completion_tokens_details", None) if usage else None
+        reasoning = getattr(choice.message, "reasoning_content", None) or getattr(choice.message, "reasoning", None)
+        reasoning = reasoning if isinstance(reasoning, str) else ""
+        run = RunResult(
+            answer=choice.message.content or "",
+            messages=messages,
+            finish_reason=choice.finish_reason or "",
+            completion_tokens=usage.completion_tokens if usage else 0,
+            request_id=response.id or "",
+            request_time=datetime.now(timezone.utc).isoformat(),
+            reasoning_tokens=getattr(details, "reasoning_tokens", None),
+        )
 
-        if finish_reason == "length":
+        if run.finish_reason == "length":
+            run.truncation = classify_truncation(reasoning + "\n" + run.answer)
+            run.truncated_in_reasoning = _truncated_in_reasoning(run.answer, reasoning)
+            advice = (
+                "Output is repeating itself; more tokens will not help."
+                if run.truncation == "loop"
+                else "Consider increasing --max-tokens."
+            )
             _stderr.print(
                 f"[yellow]WARNING[/yellow]: response truncated at {max_tokens} tokens "
-                f"(completion_tokens={completion_tokens}, request_id={request_id}){tag}. "
-                "Consider increasing --max-tokens."
+                f"({describe_generation(run)}){tag}. {advice}"
             )
 
-        if answer.strip():
-            return answer, finish_reason, completion_tokens, request_id, request_time
+        if run.answer.strip():
+            return run
 
-        if attempt < _MAX_EMPTY_RETRIES:
+        if attempt < empty_retries:
             _stderr.print(
-                f"[yellow]WARNING[/yellow]: empty answer on attempt {attempt + 1}/{_MAX_EMPTY_RETRIES}{tag}. "
-                f"finish_reason={finish_reason!r}, completion_tokens={completion_tokens}, "
-                f"request_id={request_id}. Retrying…"
+                f"[yellow]WARNING[/yellow]: empty answer on attempt {attempt + 1}/{empty_retries}{tag}. "
+                f"{describe_generation(run)}. Retrying…"
             )
-        else:
+        elif empty_retries > 0:
             _stderr.print(
-                f"[red]WARNING[/red]: empty answer after {_MAX_EMPTY_RETRIES} retries{tag}. "
-                f"finish_reason={finish_reason!r}, completion_tokens={completion_tokens}, "
-                f"request_id={request_id}. Giving up."
+                f"[red]WARNING[/red]: empty answer after {empty_retries} retries{tag}. "
+                f"{describe_generation(run)}. Giving up."
             )
 
-    return answer, finish_reason, completion_tokens, request_id, request_time
+    return run
 
 # Short hardcoded acknowledgment so conversation structure is identical
 # between target and reference runs. This ensures the only variable is
@@ -120,19 +191,13 @@ def run_scenario(
     unique_prefix: str | None = None,
     max_tokens: int = 1024,
     temperature: float = 0.1,
+    empty_retries: int = _MAX_EMPTY_RETRIES,
 ) -> RunResult:
     messages = build_messages(scenario, documents, unique_prefix)
     label = f"scenario={scenario.id}, prefix={'ref' if unique_prefix else 'target'}"
-    answer, finish_reason, completion_tokens, request_id, request_time = _call_api(client, model, messages, max_tokens, label, temperature=temperature)
-    return RunResult(
-        answer=answer,
-        messages=messages,
-        unique_prefix=unique_prefix,
-        finish_reason=finish_reason,
-        completion_tokens=completion_tokens,
-        request_id=request_id,
-        request_time=request_time,
-    )
+    run = _call_api(client, model, messages, max_tokens, label, temperature=temperature, empty_retries=empty_retries)
+    run.unique_prefix = unique_prefix
+    return run
 
 
 def get_reference_answer(
@@ -149,10 +214,15 @@ def get_reference_answer(
     If prefix is supplied it is reused (so subsequent target calls with the same
     prefix will hit blocks cached by this reference call). If omitted a fresh UUID
     is generated, which is appropriate when the caller wants an isolated ground truth.
+
+    Empty answers are not retried here: the prefix is already cached after the first call,
+    so a retry under it would not be a clean recompute. Use prepare_reference instead.
     """
     if prefix is None:
         prefix = str(uuid.uuid4())
-    return run_scenario(scenario, documents, client, model, prefix, max_tokens, temperature=temperature)
+    return run_scenario(
+        scenario, documents, client, model, prefix, max_tokens, temperature=temperature, empty_retries=0,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -213,20 +283,14 @@ def run_sequential_pair(
     unique_prefix: str | None = None,
     max_tokens: int = 1024,
     temperature: float = 0.1,
+    empty_retries: int = _MAX_EMPTY_RETRIES,
 ) -> RunResult:
     """Run the conversation up to pair_index and return the answer for that pair."""
     messages = build_pairs_messages(pairs, documents, pair_index, unique_prefix)
     label = f"pair={pair_index}, prefix={'ref' if unique_prefix else 'target'}"
-    answer, finish_reason, completion_tokens, request_id, request_time = _call_api(client, model, messages, max_tokens, label, temperature=temperature)
-    return RunResult(
-        answer=answer,
-        messages=messages,
-        unique_prefix=unique_prefix,
-        finish_reason=finish_reason,
-        completion_tokens=completion_tokens,
-        request_id=request_id,
-        request_time=request_time,
-    )
+    run = _call_api(client, model, messages, max_tokens, label, temperature=temperature, empty_retries=empty_retries)
+    run.unique_prefix = unique_prefix
+    return run
 
 
 def get_reference_pair_answer(
@@ -242,8 +306,54 @@ def get_reference_pair_answer(
     """Same as run_sequential_pair but with a cache-busting prefix to force a cache miss.
 
     If prefix is supplied it is reused so subsequent target calls with the same
-    prefix will hit blocks cached by this reference call.
+    prefix will hit blocks cached by this reference call. Empty answers are not
+    retried, see get_reference_answer.
     """
     if prefix is None:
         prefix = str(uuid.uuid4())
-    return run_sequential_pair(pairs, documents, client, model, pair_index, prefix, max_tokens, temperature=temperature)
+    return run_sequential_pair(
+        pairs, documents, client, model, pair_index, prefix, max_tokens, temperature=temperature, empty_retries=0,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Reference preparation
+# ---------------------------------------------------------------------------
+
+def is_complete(run: RunResult) -> bool:
+    """A generation is complete when the server stopped on its own and returned a non-empty answer."""
+    return run.finish_reason == "stop" and bool(run.answer.strip())
+
+
+def prepare_reference(
+    generate: Callable[[str], RunResult],
+    prefix: str,
+    retries: int = DEFAULT_REFERENCE_RETRIES,
+    label: str = "",
+) -> list[RunResult]:
+    """Generate the reference, retrying incomplete ones (truncated or empty) under a fresh prefix.
+
+    generate(prefix) runs the reference conversation with the given cache-busting prefix.
+    A retry never reuses a prefix: the failed attempt has already cached its blocks, so the
+    next call under it would not be a clean recompute.
+
+    Returns every attempt in order. The last one is the reference to use; it is incomplete
+    only when all attempts failed.
+    """
+    tag = escape(f" [{label}]") if label else ""
+    max_attempts = max(retries, 0) + 1
+    attempts: list[RunResult] = []
+
+    for attempt in range(1, max_attempts + 1):
+        run = generate(prefix if attempt == 1 else str(uuid.uuid4()))
+        attempts.append(run)
+        if is_complete(run):
+            break
+
+        outcome = "Retrying with a fresh prefix…" if attempt < max_attempts else "Giving up."
+        _stderr.print(
+            f"[yellow]WARNING[/yellow]: incomplete reference on attempt {attempt}/{max_attempts}{tag} "
+            f"({describe_generation(run)}). {outcome}"
+        )
+
+    return attempts

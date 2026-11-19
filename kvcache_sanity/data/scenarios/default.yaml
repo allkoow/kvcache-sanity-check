@@ -9,12 +9,13 @@ scenarios:
       - doc_climate_change
       - doc_ancient_rome
       - doc_black_death
-    question: "Summarize Document 1 only — do not mention any other documents. What is it about and what are exactly two specific facts from it?"
+    # Two single-answer facts instead of a summary: an open "pick two facts" request made
+    # the model loop over candidate facts in its reasoning until it hit max_tokens.
+    question: "Answer from Document 1 only, in two short sentences: on what date was the first ARPANET link established, and what share of the information flowing through two-way telecommunications networks did the Internet carry in 1993?"
     target_doc_id: doc_history_of_the_internet
     key_facts:
-      - Internet
-      - ARPANET
-      - Tim Berners-Lee
+      - October 29, 1969
+      - 1%
 
   # Question targets a document from the middle of the context window.
   - id: middle_doc_recall
@@ -25,12 +26,12 @@ scenarios:
       - doc_world_war_ii
       - doc_solar_system
       - doc_quantum_mechanics
-    question: "What was Document 3 about? Give a brief summary of Document 3 only — do not include information from any other document. Include exactly two specific facts from it."
+    # Single-answer facts for the same reason as early_doc_recall.
+    question: "Answer from Document 3 only, in two short sentences: on what date did Winston Churchill replace Neville Chamberlain as Prime Minister, and which German battleship did the British Home Fleet sink on 27 May 1941?"
     target_doc_id: doc_world_war_ii
     key_facts:
-      - World War II
-      - Hitler
-      - "1939"
+      - 10 May 1940
+      - Bismarck
 
   # Asks for a specific named fact — hard to guess without the right document.
   - id: specific_fact_retrieval
