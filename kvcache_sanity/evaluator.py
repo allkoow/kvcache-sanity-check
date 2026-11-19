@@ -75,7 +75,7 @@ Score 0–10:
   0–3 = wrong topic, major factual errors, or about a different document entirely
 
 Respond with valid JSON only — no markdown, no explanation outside the JSON:
-{{"score": <int 0-10>, "reasoning": "<one or two sentences>", "verdict": "<pass|fail>"}}\
+{{"reasoning": "<one or two sentences>", "score": <int 0-10>}}\
 """
 
 # topic: only catches wrong-document answers; ignores detail differences
@@ -104,8 +104,30 @@ First identify the topic of each answer in a short phrase. Then score:
   0–3  = clearly about a different topic or document entirely
 
 Respond with valid JSON only — no markdown, no explanation outside the JSON:
-{{"reference_topic": "<topic of REFERENCE in a few words>", "target_topic": "<topic of TARGET in a few words>", "score": <int 0-10>, "reasoning": "<one sentence>", "verdict": "<pass|fail>"}}\
+{{"reference_topic": "<topic of REFERENCE in a few words>", "target_topic": "<topic of TARGET in a few words>", "reasoning": "<one sentence>", "score": <int 0-10>}}\
 """
+
+# JSON schemas the judge response is constrained to (server-side guided decoding, e.g. xgrammar
+# in vLLM). Property order is the generation order: the model explains before it scores.
+_STRING = {"type": "string"}
+_SCORE = {"type": "integer", "minimum": 0, "maximum": 10}
+
+
+def _verdict_schema(properties: dict[str, dict]) -> dict:
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": list(properties),
+        "additionalProperties": False,
+    }
+
+
+_SCHEMAS: dict[str, dict] = {
+    "strict": _verdict_schema({"reasoning": _STRING, "score": _SCORE}),
+    "topic": _verdict_schema({
+        "reference_topic": _STRING, "target_topic": _STRING, "reasoning": _STRING, "score": _SCORE,
+    }),
+}
 
 PROMPT_NAMES = sorted(_PROMPTS)
 DEFAULT_PROMPT = "strict"
@@ -119,6 +141,10 @@ class JudgeConfig:
 
     prompt selects the template: "strict" (fine-grained consistency scoring) or
     "topic" (only catches wrong-document answers, ignores detail differences).
+
+    structured constrains the response to the prompt's JSON schema via the OpenAI
+    ``response_format`` parameter (server-side guided decoding). Turn it off for servers
+    that reject ``response_format``; parsing and retries behave the same either way.
     """
 
     client: OpenAI
@@ -128,10 +154,19 @@ class JudgeConfig:
     max_tokens: int = DEFAULT_JUDGE_MAX_TOKENS
     retries: int = DEFAULT_JUDGE_RETRIES
     threshold: float = 0.7
+    structured: bool = True
 
     def __post_init__(self) -> None:
         if self.prompt not in _PROMPTS:
             raise ValueError(f"Unknown judge prompt {self.prompt!r}. Choose from: {PROMPT_NAMES}")
+
+    def response_format(self) -> dict | None:
+        if not self.structured:
+            return None
+        return {
+            "type": "json_schema",
+            "json_schema": {"name": "judge_verdict", "strict": True, "schema": _SCHEMAS[self.prompt]},
+        }
 
 
 def _parse_judge_response(raw: str, threshold: float) -> EvaluationResult:
@@ -181,6 +216,9 @@ def evaluate_answers(
     The evaluation call itself uses a unique prefix to prevent cache hits,
     since the judge must not be influenced by prior cached state either.
 
+    With judge.structured the response is constrained to the prompt's JSON schema, so
+    malformed output can only come from truncation; the checks below stay as a safety net.
+
     A judge response without a valid verdict (empty, truncated, not JSON, wrong schema)
     says nothing about the target answer, so the call is repeated up to judge.retries
     times. A valid verdict, PASS or FAIL, is never retried. Every attempt gets a fresh
@@ -211,11 +249,16 @@ def evaluate_answers(
             },
             {"role": "user", "content": prompt},
         ]
+        request_kwargs = {}
+        response_format = judge.response_format()
+        if response_format is not None:
+            request_kwargs["response_format"] = response_format
         response = judge.client.chat.completions.create(
             model=judge.model,
             messages=messages,
             max_tokens=judge.max_tokens,
             temperature=judge.temperature,
+            **request_kwargs,
         )
         choice = response.choices[0]
         raw = (choice.message.content or "").strip()

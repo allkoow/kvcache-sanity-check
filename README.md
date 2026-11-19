@@ -144,6 +144,8 @@ Document token counts are the corpus's rough `chars/4` estimate (see `approximat
 | `strict` (default) | Fine-grained consistency scoring — catches partial errors and detail drift |
 | `topic` | Only fails if the model clearly addressed the wrong document — good for initial testing |
 
+The judge's response is constrained to a JSON schema (`response_format`, which vLLM serves with guided decoding such as xgrammar), so it can't come back as prose or with a bad score. Truncation (`--judge-max-tokens`) can still cut it off, and the retry logic covers that. Pass `--no-judge-structured` for a server that rejects `response_format`.
+
 ## Extending
 
 **Download more corpus documents:**

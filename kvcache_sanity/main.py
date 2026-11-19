@@ -351,6 +351,9 @@ def _run_sequential_pairs(context: RunContext, scenario: Scenario, temperature: 
               help="Extra judge calls when a response carries no valid verdict (empty, truncated, not JSON or "
                    "wrong schema). A valid verdict, including FAIL, is never retried; when all attempts fail the "
                    "case is JUDGE_ERROR.")
+@click.option("--judge-structured/--no-judge-structured", default=True, show_default=True,
+              help="Constrain the judge response to a JSON schema (OpenAI 'response_format', guided "
+                   "decoding on vLLM). Use --no-judge-structured for servers that reject it.")
 @click.option("--reference-retries", default=DEFAULT_REFERENCE_RETRIES, show_default=True,
               type=click.IntRange(min=0),
               help="Extra reference generations, each under a fresh cache-busting prefix, when the reference "
@@ -392,7 +395,7 @@ def _run_sequential_pairs(context: RunContext, scenario: Scenario, temperature: 
 def cli(
     target_url, model, api_key,
     judge_url, judge_model, judge_api_key,
-    temperature, judge_temperature, judge_max_tokens, judge_retries, reference_retries,
+    temperature, judge_temperature, judge_max_tokens, judge_retries, judge_structured, reference_retries,
     iterations, threshold, scenarios_name, scenarios_file, corpus_dir,
     max_tokens, judge_prompt, log_file, accuracy_csv, verbose,
 ):
@@ -433,6 +436,7 @@ def cli(
         temperature=judge_temperature,
         max_tokens=judge_max_tokens,
         retries=judge_retries,
+        structured=judge_structured,
         threshold=threshold,
     )
 
