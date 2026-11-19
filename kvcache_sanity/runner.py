@@ -79,7 +79,7 @@ def describe_generation(run: RunResult) -> str:
     return ", ".join(parts)
 
 
-def _now() -> str:
+def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
@@ -114,7 +114,7 @@ def _call_api(
     run = RunResult(answer="", messages=messages)
 
     for attempt in range(empty_retries + 1):
-        started_at = _now()
+        started_at = utc_now()
         try:
             response = client.chat.completions.create(
                 model=model,
@@ -126,11 +126,11 @@ def _call_api(
             error = f"{type(exc).__name__}: {exc}"
             _stderr.print(f"[red]ERROR[/red]: request failed{tag}: {escape(error)}")
             return RunResult(
-                answer="", messages=messages, started_at=started_at, finished_at=_now(),
+                answer="", messages=messages, started_at=started_at, finished_at=utc_now(),
                 error=error, timed_out=isinstance(exc, openai.APITimeoutError),
             )
 
-        finished_at = _now()
+        finished_at = utc_now()
         choice = response.choices[0]
         usage = response.usage
         details = getattr(usage, "completion_tokens_details", None) if usage else None

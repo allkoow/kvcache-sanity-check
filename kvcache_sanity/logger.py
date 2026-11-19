@@ -36,6 +36,24 @@ def _truncate_messages(messages: list[dict]) -> list[MessageLog]:
     return result
 
 
+def reference_attempt_log(attempt: RunResult) -> ReferenceAttemptLog:
+    return ReferenceAttemptLog(
+        prefix=attempt.unique_prefix or "",
+        answer=attempt.answer,
+        finish_reason=attempt.finish_reason,
+        completion_tokens=attempt.completion_tokens,
+        request_id=attempt.request_id,
+        request_time=attempt.request_time,
+        started_at=attempt.started_at,
+        finished_at=attempt.finished_at,
+        complete=is_complete(attempt),
+        reasoning_tokens=attempt.reasoning_tokens,
+        truncation=attempt.truncation,
+        truncated_in_reasoning=attempt.truncated_in_reasoning,
+        error=attempt.error,
+    )
+
+
 class RunLogger:
     def __init__(self, path: Path) -> None:
         self._path = path
@@ -52,21 +70,7 @@ class RunLogger:
         status: ResultStatus | None = None,
         reference_attempts: list[RunResult] | None = None,
     ) -> None:
-        attempt_logs = [
-            ReferenceAttemptLog(
-                prefix=attempt.unique_prefix or "",
-                answer=attempt.answer,
-                finish_reason=attempt.finish_reason,
-                completion_tokens=attempt.completion_tokens,
-                request_id=attempt.request_id,
-                request_time=attempt.request_time,
-                complete=is_complete(attempt),
-                reasoning_tokens=attempt.reasoning_tokens,
-                truncation=attempt.truncation,
-                truncated_in_reasoning=attempt.truncated_in_reasoning,
-            )
-            for attempt in reference_attempts or []
-        ]
+        attempt_logs = [reference_attempt_log(attempt) for attempt in reference_attempts or []]
         run_log = RunLog(
             timestamp=datetime.now(timezone.utc).isoformat(),
             scenario_id=scenario.id,
