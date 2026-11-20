@@ -5,14 +5,12 @@ import re
 import tempfile
 from pathlib import Path
 
-from pydantic import BaseModel
-
 from kvcache_sanity.models import ReferenceSet, ReplayRun
 
 _NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 
 
-def _write_atomic(path: Path, model: BaseModel) -> None:
+def write_atomic(path: Path, text: str) -> None:
     """Readers never see a partial file: a SIGKILL mid-write leaves the previous version."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -20,7 +18,7 @@ def _write_atomic(path: Path, model: BaseModel) -> None:
 
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as tmp_file:
-            tmp_file.write(model.model_dump_json(indent=2))
+            tmp_file.write(text)
 
         os.replace(tmp_name, path)
     except BaseException:
@@ -29,7 +27,7 @@ def _write_atomic(path: Path, model: BaseModel) -> None:
 
 
 class StateDir:
-    """Artifacts phases hand over to each other, so each phase can run in a separate step."""
+    """Where a run saves its phase artifacts and keeps its checkpoint control files."""
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
@@ -46,15 +44,8 @@ class StateDir:
     def control_dir(self) -> Path:
         return self.path / "control"
 
-    @property
-    def metrics_dir(self) -> Path:
-        return self.path / "metrics"
-
     def save_reference_set(self, reference_set: ReferenceSet) -> None:
-        _write_atomic(self.reference_set_path, reference_set)
-
-    def load_reference_set(self) -> ReferenceSet:
-        return ReferenceSet.model_validate_json(self.reference_set_path.read_text(encoding="utf-8"))
+        write_atomic(self.reference_set_path, reference_set.model_dump_json(indent=2))
 
     def replay_path(self, name: str) -> Path:
         if not _NAME_RE.fullmatch(name):
@@ -63,7 +54,4 @@ class StateDir:
         return self.replays_dir / f"{name}.json"
 
     def save_replay(self, replay: ReplayRun) -> None:
-        _write_atomic(self.replay_path(replay.name), replay)
-
-    def load_replay(self, name: str) -> ReplayRun:
-        return ReplayRun.model_validate_json(self.replay_path(name).read_text(encoding="utf-8"))
+        write_atomic(self.replay_path(replay.name), replay.model_dump_json(indent=2))

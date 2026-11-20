@@ -45,8 +45,8 @@ from kvcache_sanity.runner import (
 from kvcache_sanity.scenarios import find_named_scenarios, load_scenarios
 from kvcache_sanity import report
 from kvcache_sanity.cases import build_cases
-from kvcache_sanity.engine import run_phases
-from kvcache_sanity.phases import EvaluatePhase, PhaseContext, ReferencePhase, ReplayPhase, RunState
+from kvcache_sanity.engine import DEFAULT_CHECKPOINT_TIMEOUT, Checkpoint, parse_plan, run_phases
+from kvcache_sanity.phases import EvaluatePhase, PhaseContext, ReferencePhase, RunState
 from kvcache_sanity.state import StateDir
 
 console = Console()
@@ -348,7 +348,26 @@ def _run_sequential_pairs(context: RunContext, scenario: Scenario, temperature: 
     default=None,
     type=click.Path(file_okay=False),
     metavar="DIR",
-    help="Save the reference set and every replay (JSON) to DIR after each phase.",
+    help="Save the reference set and every replay (JSON) to DIR after each phase. "
+         "Checkpoint control files live in DIR/control.",
+)
+@click.option(
+    "--plan",
+    default="replay",
+    show_default=True,
+    help="Steps between the reference and evaluate phases, comma-separated: 'replay' sends every case "
+         "--iterations times under its reference prefix, 'wait' pauses at a checkpoint. Replays are named "
+         "replay-1, replay-2, ... and checkpoints wait-1, wait-2, ... At a checkpoint the run writes "
+         "DIR/control/wait-N.waiting and goes on once wait-N.continue appears; wait-N.abort or the timeout "
+         "skips the remaining replays, evaluates what came in and fails the run. "
+         "Example: 'replay,wait,replay'.",
+)
+@click.option(
+    "--checkpoint-timeout",
+    default=DEFAULT_CHECKPOINT_TIMEOUT,
+    show_default=True,
+    type=click.FloatRange(min=0),
+    help="Seconds to wait at a checkpoint before giving up on it.",
 )
 @click.option("--verbose", "-v", is_flag=True,
               help="Print target and reference answers for every test, not just failures.")
@@ -357,7 +376,7 @@ def cli(
     judge_url, judge_model, judge_api_key,
     temperature, judge_temperature, judge_max_tokens, judge_retries, judge_structured, request_timeout,
     reference_retries, iterations, threshold, scenarios_name, scenarios_file, corpus_dir,
-    max_tokens, judge_prompt, log_file, accuracy_csv, state_dir, verbose,
+    max_tokens, judge_prompt, log_file, accuracy_csv, state_dir, plan, checkpoint_timeout, verbose,
 ):
     """Sanity-check LLM output correctness when using offloaded KV cache.
 
@@ -427,10 +446,6 @@ def cli(
         accuracy_csv=Path(accuracy_csv) if accuracy_csv else None,
     )
 
-    # CloudAI and Slurm stop a job with SIGTERM; handled like Ctrl+C so finished results are kept.
-    previous_sigterm = signal.signal(signal.SIGTERM, _raise_interrupt)
-    interrupted = False
-
     phase_context = PhaseContext(
         target_client=target_client,
         model=model,
@@ -438,18 +453,36 @@ def cli(
         temperature=temperature,
         reference_retries=reference_retries,
     )
+
+    try:
+        plan_steps = parse_plan(plan, phase_context, iterations)
+    except ValueError as exc:
+        raise click.BadParameter(str(exc), param_hint="--plan")
+
+    if not state_dir and any(isinstance(step, Checkpoint) for step in plan_steps):
+        raise click.UsageError("a plan with wait steps needs --state-dir: checkpoint control files live there.")
+
     # FIXME: the phases write no --log-file traces yet; only sequential_pairs scenarios are logged.
-    phases = [
+    steps = [
         ReferencePhase(phase_context),
-        ReplayPhase(phase_context, "replay", iterations),
+        *plan_steps,
         EvaluatePhase(judge, on_result=context.record, verbose=verbose),
     ]
     state = RunState(cases=build_cases(scenarios, documents))
     pair_scenarios = [scenario for scenario in scenarios if scenario.mode == "sequential_pairs"]
 
+    # CloudAI and Slurm stop a job with SIGTERM; handled like Ctrl+C so finished results are kept.
+    previous_sigterm = signal.signal(signal.SIGTERM, _raise_interrupt)
+    interrupted = False
+
     try:
         if state.cases:
-            interrupted = run_phases(phases, state, StateDir(Path(state_dir)) if state_dir else None)
+            interrupted = run_phases(
+                steps,
+                state,
+                StateDir(Path(state_dir)) if state_dir else None,
+                checkpoint_timeout,
+            )
 
         for scenario in pair_scenarios:
             if interrupted:

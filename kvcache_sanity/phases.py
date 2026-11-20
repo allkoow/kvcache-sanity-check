@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import time
 import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Callable
@@ -162,24 +161,16 @@ class ReplayPhase(Phase):
     Every request reuses the prefix of the case's reference, so it reads the blocks the
     reference phase stored.
 
-    Requests go one at a time, in rounds of one request per case. With duration, rounds repeat
-    until it has elapsed (at least one), capped by iterations when that is non-zero.
+    Requests go one at a time, in rounds of one request per case, one round per iteration.
 
     A case without a complete reference is not sent; it gets one attempt carrying the
     reference status, so no case drops out of the results.
     """
 
-    def __init__(
-        self,
-        context: PhaseContext,
-        name: str,
-        iterations: int,
-        duration: float | None = None,
-    ) -> None:
+    def __init__(self, context: PhaseContext, name: str, iterations: int) -> None:
         self.context = context
         self.name = name
         self.iterations = iterations
-        self.duration = duration
 
     def run(self, state: RunState) -> None:
         records = state.require_reference_set().records
@@ -189,29 +180,15 @@ class ReplayPhase(Phase):
         sendable = [record for record in records if record.status == ResultStatus.PASS]
         replay.attempts = [self._carried_attempt(record) for record in records if record.status != ResultStatus.PASS]
 
-        deadline = time.monotonic() + self.duration if self.duration is not None else None
-        rounds = 0
-
         try:
-            while sendable and self._more_rounds(rounds, deadline):
-                rounds += 1
-
+            for seq in range(1, self.iterations + 1):
                 for record in sendable:
-                    replay.attempts.append(self._attempt(record, rounds))
+                    replay.attempts.append(self._attempt(record, seq))
 
             replay.finished_at = utc_now()
         finally:
             order = {record.case.case_id: index for index, record in enumerate(records)}
             replay.attempts.sort(key=lambda attempt: (order[attempt.case_id], attempt.seq))
-
-    def _more_rounds(self, done: int, deadline: float | None) -> bool:
-        if self.iterations and done >= self.iterations:
-            return False
-
-        if deadline is None:
-            return done < self.iterations
-
-        return done == 0 or time.monotonic() < deadline
 
     @staticmethod
     def _carried_attempt(record: ReferenceRecord) -> ReplayAttempt:

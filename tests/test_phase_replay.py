@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import time
-
 import httpx
 import openai
 
@@ -127,24 +125,3 @@ def test_attempts_follow_reference_order_then_seq():
 
     assert order == [("late", 1), ("late", 2), ("early", 1), ("early", 2)]
 
-
-def test_duration_repeats_rounds_until_the_deadline():
-    def responder(kwargs):
-        time.sleep(0.03)
-
-        return make_response("answer")
-
-    reference_set = _reference_set(_record("early"))
-
-    replay = _replay(
-        FakeClient(responder),
-        reference_set,
-        "warm",
-        iterations=0,
-        duration=0.2,
-    )
-
-    seqs = [attempt.seq for attempt in replay.attempts]
-
-    assert len(seqs) >= 2
-    assert seqs == list(range(1, len(seqs) + 1))

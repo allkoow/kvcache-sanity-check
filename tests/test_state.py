@@ -46,5 +46,7 @@ def test_reference_set_round_trip(tmp_path):
 
     state.save_reference_set(reference_set)
 
-    assert state.load_reference_set().model_dump() == reference_set.model_dump()
+    saved = ReferenceSet.model_validate_json(state.reference_set_path.read_text(encoding="utf-8"))
+
+    assert saved.model_dump() == reference_set.model_dump()
     assert [path.name for path in (tmp_path / "state").iterdir()] == ["reference_set.json"]
