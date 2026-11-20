@@ -1,4 +1,5 @@
 import json
+import re
 import uuid
 from dataclasses import dataclass
 from openai import OpenAI
@@ -318,6 +319,38 @@ def evaluate_answers(
         judge_attempts=attempt,
         attempt_logs=attempt_logs,
         judge_error=judge_error,
+    )
+
+
+def _contains_words(text: str, phrase: str) -> bool:
+    """Whether phrase appears in text as whole words, ignoring case and whitespace runs."""
+
+    normalized = " ".join(phrase.split())
+    pattern = rf"(?<!\w){re.escape(normalized)}(?!\w)"
+
+    return re.search(pattern, " ".join(text.split()), re.IGNORECASE) is not None
+
+
+def missing_key_facts(answer: str, key_facts: list[str]) -> list[str]:
+    """Key facts that do not appear in the answer, e.g. H9Z45 is missing from "H9Z456"."""
+
+    return [fact for fact in key_facts if not _contains_words(answer, fact)]
+
+
+def match_key_facts(answer: str, key_facts: list[str]) -> EvaluationResult:
+    """Pass an answer containing every key fact; the score is the fraction found, the reasoning names the rest."""
+
+    missing = missing_key_facts(answer, key_facts)
+    found = len(key_facts) - len(missing)
+
+    reasoning = f"{found}/{len(key_facts)} key facts found"
+    if missing:
+        reasoning += f", missing: {', '.join(missing)}"
+
+    return EvaluationResult(
+        score=round(found / len(key_facts), 3),
+        reasoning=reasoning,
+        passed=not missing,
     )
 
 

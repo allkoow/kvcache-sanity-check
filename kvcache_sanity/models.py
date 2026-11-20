@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from enum import Enum
-from pydantic import BaseModel
-from typing import Optional
+from pydantic import BaseModel, model_validator
+from typing import Literal, Optional
 
 
 class ResultStatus(str, Enum):
@@ -16,6 +16,9 @@ class ResultStatus(str, Enum):
     TARGET_INCOMPLETE = "TARGET_INCOMPLETE"
     # No valid judge verdict after all attempts: the case says nothing about the cache path.
     JUDGE_ERROR = "JUDGE_ERROR"
+    # The reference of an exact case misses some key facts: the model cannot do the task even on a full
+    # recompute, so the case says nothing about the cache path.
+    REFERENCE_MISSING_FACTS = "REFERENCE_MISSING_FACTS"
 
 
 class Document(BaseModel):
@@ -38,12 +41,22 @@ class Scenario(BaseModel):
     document_ids: list[str] = []   # ordered; loaded into context in this sequence
     question: str = ""
     target_doc_id: str = ""        # which document the question is about
-    key_facts: list[str] = []      # reserved for future keyword-based evaluation fallback
+    key_facts: list[str] = []      # with evaluation "exact": every one must appear in the answer
+    # "judge" compares the answer with the reference through the LLM judge; "exact" passes an answer
+    # that contains every key fact as a word, without a judge call.
+    evaluation: Literal["judge", "exact"] = "judge"
     # --- sequential_pairs mode ---
     mode: str = "multi_turn_recall"
     pairs: list[ScenarioPair] = []
     evaluate_from_pair: int = 1    # skip this many leading pairs before evaluating
     temperature: float | None = None
+
+    @model_validator(mode="after")
+    def _exact_needs_key_facts(self) -> "Scenario":
+        if self.evaluation == "exact" and not self.key_facts:
+            raise ValueError(f"scenario {self.id!r}: evaluation 'exact' needs key_facts")
+
+        return self
 
 
 class EvaluationResult(BaseModel):
@@ -182,6 +195,8 @@ class Case(BaseModel):
     # Detects a corpus or scenario change between the phase that wrote an artifact and the one reading it.
     messages_sha256: str
     temperature: float | None = None  # scenario override of the run temperature
+    evaluation: Literal["judge", "exact"] = "judge"
+    key_facts: list[str] = []
 
 
 class ReferenceRecord(BaseModel):

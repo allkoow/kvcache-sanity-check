@@ -25,17 +25,23 @@ def test_no_results_is_a_failure():
     assert run_failed([])
 
 
-def test_csv_counts_errors_and_timeouts(tmp_path):
+def test_csv_counts_failed_requests_and_invalid_references(tmp_path):
     path = tmp_path / "accuracy_results.csv"
-    results = [_result(ResultStatus.ERROR, False), _result(ResultStatus.TIMEOUT, False)]
+    results = [
+        _result(ResultStatus.ERROR, False),
+        _result(ResultStatus.TIMEOUT, False),
+        _result(ResultStatus.REFERENCE_MISSING_FACTS, False),
+    ]
 
     write_accuracy_csv(results, path)
 
     overall = list(csv.DictReader(path.open()))[-1]
 
     assert overall["Task"] == "OVERALL"
-    assert overall["Total"] == "2"
+    assert overall["Total"] == "3"
     assert overall["Correct"] == "0"
     assert overall["Error"] == "1"
     assert overall["Timeout"] == "1"
-    assert overall["Invalid"] == "0"
+    # Failed requests are incorrect answers; only the reference without the key facts is invalid.
+    assert overall["Invalid"] == "1"
+    assert overall["ReferenceMissingFacts"] == "1"

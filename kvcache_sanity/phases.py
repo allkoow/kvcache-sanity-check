@@ -10,7 +10,13 @@ from rich.console import Console
 from rich.markup import escape
 
 from kvcache_sanity import report
-from kvcache_sanity.evaluator import JudgeConfig, evaluate_answers, verdict_status
+from kvcache_sanity.evaluator import (
+    JudgeConfig,
+    evaluate_answers,
+    match_key_facts,
+    missing_key_facts,
+    verdict_status,
+)
 from kvcache_sanity.logger import reference_attempt_log
 from kvcache_sanity.models import (
     Case,
@@ -228,11 +234,15 @@ class ReplayPhase(Phase):
 
 
 class EvaluatePhase(Phase):
-    """Judge every attempt of every replay against the reference answer of its case.
+    """Evaluate every attempt of every replay against the reference of its case.
 
-    Only PASS attempts are judged. Any other attempt keeps its status (a failed request,
+    Only PASS attempts are evaluated. Any other attempt keeps its status (a failed request,
     a truncated answer, a case without a complete reference) and is never sent to the judge.
     Results come in replay order, each tagged with its replay name as phase.
+
+    A "judge" case compares the answer with the reference answer through the judge. An "exact"
+    case passes an answer containing every key fact, without a judge call; when the reference
+    itself misses some, the case is REFERENCE_MISSING_FACTS.
 
     It also runs after an interrupt, so the attempts that came in before it still count.
     on_result gets every result as soon as it is known, e.g. to keep the accuracy CSV current.
@@ -265,17 +275,32 @@ class EvaluatePhase(Phase):
                 if self.on_result:
                     self.on_result(result)
 
-    def _result(self, phase: str, record: ReferenceRecord, attempt: ReplayAttempt) -> TestResult:
+    def _verdict(self, record: ReferenceRecord, attempt: ReplayAttempt) -> tuple[EvaluationResult, ResultStatus]:
         case = record.case
 
-        if attempt.status == ResultStatus.PASS:
+        if attempt.status != ResultStatus.PASS:
+            reasoning = attempt.error or f"[{attempt.status.value}, not evaluated]"
+
+            return EvaluationResult(score=0.0, reasoning=reasoning, passed=False), attempt.status
+
+        if case.evaluation == "judge":
             trace = evaluate_answers(case.question, attempt.answer, record.answer, self.judge)
-            evaluation = trace.result
-            status = verdict_status(trace)
-        else:
-            reasoning = attempt.error or f"[{attempt.status.value}, judge skipped]"
-            evaluation = EvaluationResult(score=0.0, reasoning=reasoning, passed=False)
-            status = attempt.status
+
+            return trace.result, verdict_status(trace)
+
+        missing = missing_key_facts(record.answer, case.key_facts)
+        if missing:
+            reasoning = f"[reference misses key facts: {', '.join(missing)}]"
+
+            return EvaluationResult(score=0.0, reasoning=reasoning, passed=False), ResultStatus.REFERENCE_MISSING_FACTS
+
+        evaluation = match_key_facts(attempt.answer, case.key_facts)
+
+        return evaluation, ResultStatus.PASS if evaluation.passed else ResultStatus.FAIL
+
+    def _result(self, phase: str, record: ReferenceRecord, attempt: ReplayAttempt) -> TestResult:
+        case = record.case
+        evaluation, status = self._verdict(record, attempt)
 
         result = TestResult(
             scenario_id=case.scenario_id,

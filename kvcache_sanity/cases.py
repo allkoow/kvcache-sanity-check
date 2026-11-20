@@ -30,6 +30,8 @@ def build_cases(scenarios: list[Scenario], documents: dict[str, Document]) -> li
             messages=messages,
             messages_sha256=messages_sha256(messages),
             temperature=scenario.temperature,
+            evaluation=scenario.evaluation,
+            key_facts=scenario.key_facts,
         )
         cases.append(case)
 

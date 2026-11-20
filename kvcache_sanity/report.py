@@ -17,9 +17,9 @@ def print_result(result: TestResult, verbose: bool = False) -> None:
         console.print(f"  iter {result.iteration}: [bold red]{result.status.value}[/] — {escape(result.error)}")
         return
 
-    if result.status == ResultStatus.REFERENCE_INCOMPLETE:
+    if result.status in (ResultStatus.REFERENCE_INCOMPLETE, ResultStatus.REFERENCE_MISSING_FACTS):
         console.print(
-            f"  iter {result.iteration}: [bold yellow]REFERENCE_INCOMPLETE[/] — {escape(result.evaluation.reasoning)}"
+            f"  iter {result.iteration}: [bold yellow]{result.status.value}[/] — {escape(result.evaluation.reasoning)}"
         )
         return
 
@@ -71,7 +71,7 @@ def run_failed(results: list[TestResult]) -> bool:
 
 _CSV_HEADER = [
     "Task", "Correct", "Total", "Accuracy", "Invalid", "ReferenceIncomplete", "TargetIncomplete", "JudgeError",
-    "TargetLoop", "Error", "Timeout",
+    "TargetLoop", "Error", "Timeout", "ReferenceMissingFacts",
 ]
 
 
@@ -84,6 +84,7 @@ def _csv_row(task: str, results: list[TestResult]) -> list:
 
     reference_incomplete = statuses[ResultStatus.REFERENCE_INCOMPLETE]
     judge_error = statuses[ResultStatus.JUDGE_ERROR]
+    reference_missing_facts = statuses[ResultStatus.REFERENCE_MISSING_FACTS]
 
     target_loop = sum(
         1 for result in results
@@ -91,9 +92,18 @@ def _csv_row(task: str, results: list[TestResult]) -> list:
     )
 
     return [
-        task, correct, total, f"{accuracy:.4f}",
-        reference_incomplete + judge_error, reference_incomplete, statuses[ResultStatus.TARGET_INCOMPLETE], judge_error,
-        target_loop, statuses[ResultStatus.ERROR], statuses[ResultStatus.TIMEOUT],
+        task,
+        correct,
+        total,
+        f"{accuracy:.4f}",
+        reference_incomplete + judge_error + reference_missing_facts,
+        reference_incomplete,
+        statuses[ResultStatus.TARGET_INCOMPLETE],
+        judge_error,
+        target_loop,
+        statuses[ResultStatus.ERROR],
+        statuses[ResultStatus.TIMEOUT],
+        reference_missing_facts,
     ]
 
 
@@ -101,14 +111,15 @@ def write_accuracy_csv(results: list[TestResult], path: Path) -> None:
     """Write results as a CloudAI-compatible accuracy CSV.
 
     Columns are ``Task,Correct,Total,Accuracy,Invalid,ReferenceIncomplete,TargetIncomplete,JudgeError,TargetLoop,
-    Error,Timeout`` with one row per scenario (Correct = passed iterations, Accuracy = Correct/Total as a
-    0.0-1.0 fraction) plus a final OVERALL row aggregating every iteration. CloudAI's
+    Error,Timeout,ReferenceMissingFacts`` with one row per scenario (Correct = passed iterations,
+    Accuracy = Correct/Total as a 0.0-1.0 fraction) plus a final OVERALL row aggregating every iteration. CloudAI's
     AIDynamo report strategy reads the Accuracy of the OVERALL row by column name, so the
     file is meaningful even when the process exit code is decoupled from pass/fail (e.g.
     wrapped with ``|| true``).
 
-    Invalid counts iterations that say nothing about the cache path; ReferenceIncomplete
-    and JudgeError are its breakdown. Invalid iterations are still part of Total and lower
+    Invalid counts iterations that say nothing about the cache path; ReferenceIncomplete,
+    JudgeError and ReferenceMissingFacts (an exact case whose reference misses key facts) are
+    its breakdown. Invalid iterations are still part of Total and lower
     Accuracy, so consumers that ignore the extra columns keep seeing them as failures.
 
     TargetIncomplete counts truncated or empty target answers. They are incorrect answers,

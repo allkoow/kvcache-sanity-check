@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import csv
 
+import pytest
+
 from kvcache_sanity.cases import messages_sha256
 from kvcache_sanity.evaluator import JudgeConfig
 from kvcache_sanity.models import (
@@ -19,15 +21,16 @@ from tests.conftest import FakeClient, make_response
 MESSAGES = [{"role": "system", "content": "sys"}, {"role": "user", "content": "q"}]
 
 
-def _state(*replays: ReplayRun) -> RunState:
+def _state(*replays: ReplayRun, reference_answer: str = "reference", **case_options) -> RunState:
     case = Case(
         case_id="early",
         scenario_id="early",
         question="q",
         messages=MESSAGES,
         messages_sha256=messages_sha256(MESSAGES),
+        **case_options,
     )
-    record = ReferenceRecord(case=case, prefix="ref", answer="reference", status=ResultStatus.PASS)
+    record = ReferenceRecord(case=case, prefix="ref", answer=reference_answer, status=ResultStatus.PASS)
     reference_set = ReferenceSet(
         created_at="now",
         model="model",
@@ -43,8 +46,8 @@ def _state(*replays: ReplayRun) -> RunState:
     )
 
 
-def _replay(name: str, status: ResultStatus = ResultStatus.PASS) -> ReplayRun:
-    attempt = ReplayAttempt(case_id="early", seq=1, prefix="ref", status=status, answer="target")
+def _replay(name: str, status: ResultStatus = ResultStatus.PASS, answer: str = "target") -> ReplayRun:
+    attempt = ReplayAttempt(case_id="early", seq=1, prefix="ref", status=status, answer=answer)
 
     return ReplayRun(
         name=name,
@@ -87,6 +90,31 @@ def test_failed_attempt_keeps_its_status_and_is_not_judged():
 
     assert result.status == ResultStatus.TIMEOUT
     assert not result.evaluation.passed
+    assert client.calls == []
+
+
+@pytest.mark.parametrize(
+    ("reference_answer", "target_answer", "status"),
+    [
+        ("H9Z45\nK2P81", "Codes: h9z45,  K2P81.", ResultStatus.PASS),
+        ("H9Z45\nK2P81", "H9Z456\nK2P81", ResultStatus.FAIL),
+        ("H9Z45", "H9Z45\nK2P81", ResultStatus.REFERENCE_MISSING_FACTS),
+    ],
+)
+def test_exact_case_checks_key_facts_without_the_judge(reference_answer, target_answer, status):
+    client = FakeClient(_passing_judge)
+    state = _state(
+        _replay("warm", answer=target_answer),
+        reference_answer=reference_answer,
+        evaluation="exact",
+        key_facts=["H9Z45", "K2P81"],
+    )
+
+    EvaluatePhase(_judge(client)).run(state)
+
+    (result,) = state.results
+
+    assert result.status == status
     assert client.calls == []
 
 

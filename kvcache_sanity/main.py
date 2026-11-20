@@ -339,7 +339,8 @@ def _run_sequential_pairs(context: RunContext, scenario: Scenario, temperature: 
               help="Append full run traces (JSON Lines) to this file for later review with kvcache-logs.")
 @click.option("--accuracy-csv", default=None, type=click.Path(), metavar="PATH",
               help="Write a CloudAI-compatible accuracy CSV (Task,Correct,Total,Accuracy,Invalid,"
-                   "ReferenceIncomplete,TargetIncomplete,JudgeError,TargetLoop with an OVERALL row) to PATH. "
+                   "ReferenceIncomplete,TargetIncomplete,JudgeError,TargetLoop,Error,Timeout,"
+                   "ReferenceMissingFacts with an OVERALL row) to PATH. "
                    "Per-scenario pass/fail is aggregated into a 0.0-1.0 fraction; Invalid and TargetIncomplete "
                    "iterations count in Total; TargetLoop is the subset of TargetIncomplete cut while repeating. "
                    "The file is written regardless of the exit code.")
