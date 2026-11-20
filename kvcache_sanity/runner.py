@@ -50,9 +50,29 @@ def classify_truncation(text: str) -> str:
 def _truncated_in_reasoning(content: str, reasoning: str) -> bool:
     """True when generation stopped before the final answer began.
 
-    Detectable only when the server returns reasoning in a separate field.
+    Detectable only when the server returns reasoning in a separate field or as inline harmony.
     """
     return bool(reasoning.strip()) and not content.strip()
+
+
+_HARMONY_ANALYSIS = "analysis"
+_HARMONY_FINAL = "assistantfinal"
+
+
+def _split_inline_harmony(content: str) -> tuple[str, str]:
+    """Split gpt-oss harmony output returned inline as (answer, reasoning).
+
+    A vLLM server for gpt-oss without a reasoning parser (e.g. behind Dynamo) strips the harmony
+    special tokens and returns everything in content: "analysis<reasoning>assistantfinal<answer>".
+    Without the final marker the generation stopped inside the reasoning, so there is no answer.
+    """
+
+    reasoning, marker, answer = content.removeprefix(_HARMONY_ANALYSIS).rpartition(_HARMONY_FINAL)
+
+    if not marker:
+        return "", answer
+
+    return answer.strip(), reasoning
 
 
 def describe_generation(run: RunResult) -> str:
@@ -149,8 +169,13 @@ def _call_api(
         details = getattr(usage, "completion_tokens_details", None) if usage else None
         reasoning = getattr(choice.message, "reasoning_content", None) or getattr(choice.message, "reasoning", None)
         reasoning = reasoning if isinstance(reasoning, str) else ""
+        answer = choice.message.content or ""
+
+        if not reasoning and answer.startswith(_HARMONY_ANALYSIS):
+            answer, reasoning = _split_inline_harmony(answer)
+
         run = RunResult(
-            answer=choice.message.content or "",
+            answer=answer,
             messages=messages,
             finish_reason=choice.finish_reason or "",
             completion_tokens=usage.completion_tokens if usage else 0,

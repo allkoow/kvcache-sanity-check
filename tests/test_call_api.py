@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import httpx
 import openai
+import pytest
 
 from kvcache_sanity.evaluator import JudgeConfig, evaluate_answers
-from kvcache_sanity.runner import _call_api, make_client
-from tests.conftest import make_request
+from kvcache_sanity.runner import _call_api, is_complete, make_client
+from tests.conftest import make_request, make_response
 
 MESSAGES = [{"role": "user", "content": "question"}]
 
@@ -37,6 +38,36 @@ def test_timeout_is_flagged(fake_client):
 
     assert run.timed_out
     assert run.error.startswith("APITimeoutError")
+
+
+HARMONY = (
+    'analysisWe need to answer only about that document. The document says: "Projekt Atlas ma kod H9Z45." '
+    'So answer "H9Z45".assistantfinalH9Z45'
+)
+
+
+@pytest.mark.parametrize(
+    ("content", "finish_reason", "answer", "truncated_in_reasoning"),
+    [
+        (HARMONY, "stop", "H9Z45", None),
+        ("analysisWe need to answer only about that", "length", "", True),
+        ("The analysis says H9Z45.", "stop", "The analysis says H9Z45.", None),
+    ],
+)
+def test_inline_harmony_answer_is_the_final_channel(
+    fake_client,
+    content,
+    finish_reason,
+    answer,
+    truncated_in_reasoning,
+):
+    client = fake_client(lambda kwargs: make_response(content, finish_reason=finish_reason))
+
+    run = _call_api(client, "model", MESSAGES, 16, empty_retries=0)
+
+    assert run.answer == answer
+    assert run.truncated_in_reasoning is truncated_in_reasoning
+    assert is_complete(run) == (finish_reason == "stop")
 
 
 def test_client_never_retries():
