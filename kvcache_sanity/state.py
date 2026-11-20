@@ -9,14 +9,24 @@ from kvcache_sanity.models import ReferenceSet, ReplayRun
 
 _NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 
+# The umask can only be read by setting it; done once, at import, before any thread starts.
+_UMASK = os.umask(0)
+os.umask(_UMASK)
+
 
 def write_atomic(path: Path, text: str) -> None:
-    """Readers never see a partial file: a SIGKILL mid-write leaves the previous version."""
+    """Readers never see a partial file: a SIGKILL mid-write leaves the previous version.
+
+    The file gets the mode a plain open() would give it: mkstemp alone leaves it 0600, readable
+    only by its owner, while other users of a shared results directory need to read it.
+    """
 
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
 
     try:
+        os.fchmod(fd, 0o666 & ~_UMASK)
+
         with os.fdopen(fd, "w", encoding="utf-8") as tmp_file:
             tmp_file.write(text)
 
